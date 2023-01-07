@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 koi3 = {path = "../koi3"}
 rapier2d = "0.14.0"
+kui = {path = "../koi2/crates/kui"}
 
 [profile.release]
  # Consider these options for a smaller binary size

@@ -1,5 +1,3 @@
-use std::f32::consts::PI;
-
 use koi3::*;
 mod rapier_integration;
 use rapier2d::prelude::*;
@@ -7,6 +5,7 @@ use rapier_integration::*;
 mod temporary;
 use koi_graphics_context::BlendFactor;
 use temporary::*;
+mod ui;
 
 struct LevelState {
     pitch_multiplier: f32,
@@ -214,16 +213,16 @@ fn run_scale(world: &mut World, resources: &Resources) {
 
 fn main() {
     App::default().setup_and_run(|world, resources| {
-        let mut rapier_integration = rapier_integration::RapierIntegration::new();
+        let rapier_integration = rapier_integration::RapierIntegration::new();
 
         let view_height = 100.0;
-        world.spawn((
+        let camera_entity = world.spawn((
             Transform::new().with_position(Vec3::Z * 2.0),
             Camera {
                 clear_color: Some(Color::BLACK),
                 exposure: Exposure::EV100(6.0),
                 projection_mode: ProjectionMode::Orthographic {
-                    height: 100.0,
+                    height: view_height,
                     z_near: -2.0,
                     z_far: 2.0,
                 },
@@ -233,33 +232,33 @@ fn main() {
 
         let top_of_screen = Vec3::new(0.0, view_height / 2.0 * 0.75, 0.0);
 
-        let new_texture = resources.get::<AssetStore<Texture>>().load(
-            "assets/fantasy_farm_background.png",
-            koi_graphics_context::TextureSettings::default(),
-        );
+        // Spawn the background
+        {
+            let new_texture = resources.get::<AssetStore<Texture>>().load(
+                "assets/fantasy_farm_background.png",
+                koi_graphics_context::TextureSettings::default(),
+            );
 
-        let new_material = resources.get::<AssetStore<Material>>().add(Material {
+            let new_material = resources.get::<AssetStore<Material>>().add(Material {
+                shader: Shader::UNLIT,
+                base_color_texture: Some(new_texture),
+                ..Default::default()
+            });
+
+            world.spawn((
+                Transform::new().with_scale(Vec3::fill(100.0)),
+                Mesh::VERTICAL_QUAD,
+                new_material,
+            ));
+        }
+
+        let stem_material = resources.get::<AssetStore<Material>>().add(Material {
             shader: Shader::UNLIT,
-            base_color_texture: Some(new_texture),
+            base_color: Color::from_srgb_hex(0x489B41, 1.0)
+                .with_lightness(0.7)
+                .with_chroma(0.3),
             ..Default::default()
         });
-
-        let _stem_material = resources.get::<AssetStore<Material>>().add_with_path(
-            "stem_material",
-            Material {
-                shader: Shader::UNLIT,
-                base_color: Color::from_srgb_hex(0x489B41, 1.0)
-                    .with_lightness(0.7)
-                    .with_chroma(0.3),
-                ..Default::default()
-            },
-        );
-
-        world.spawn((
-            Transform::new().with_scale(Vec3::fill(100.0)),
-            Mesh::VERTICAL_QUAD,
-            new_material,
-        ));
 
         let recolor_shader = resources.get::<AssetStore<Shader>>().load(
             "assets/custom_shader.glsl",
@@ -308,67 +307,70 @@ fn main() {
             }
         }
 
-        let witch_material = get_texture_material(
-            "assets/Witch.png",
-            resources,
-            Shader::UNLIT_TRANSPARENT,
-            Color::WHITE,
-        );
-        let pupil_material = get_texture_material(
-            "assets/Pupil.png",
-            resources,
-            Shader::UNLIT_TRANSPARENT,
-            Color::WHITE,
-        );
+        let mut spawn_witch = || {
+            let witch_material = get_texture_material(
+                "assets/Witch.png",
+                resources,
+                Shader::UNLIT_TRANSPARENT,
+                Color::WHITE,
+            );
+            let pupil_material = get_texture_material(
+                "assets/Pupil.png",
+                resources,
+                Shader::UNLIT_TRANSPARENT,
+                Color::WHITE,
+            );
 
-        let witch = world.spawn((
-            Transform::new()
-                .with_position(top_of_screen + Vec3::Z * 0.2)
-                .with_scale(Vec3::fill(25.0)),
-            witch_material,
-            Mesh::VERTICAL_QUAD,
-        ));
+            let witch = world.spawn((
+                Transform::new()
+                    .with_position(top_of_screen + Vec3::Z * 0.2)
+                    .with_scale(Vec3::fill(25.0)),
+                witch_material,
+                Mesh::VERTICAL_QUAD,
+            ));
 
-        let witch_pupil_l = world.spawn((
-            Transform::new().with_scale(Vec3::fill(0.07)),
-            pupil_material.clone(),
-            Mesh::VERTICAL_QUAD,
-        ));
-        let witch_pupil_r = world.spawn((
-            Transform::new().with_scale(Vec3::fill(0.07)),
-            pupil_material,
-            Mesh::VERTICAL_QUAD,
-        ));
+            let witch_pupil_l = world.spawn((
+                Transform::new().with_scale(Vec3::fill(0.07)),
+                pupil_material.clone(),
+                Mesh::VERTICAL_QUAD,
+            ));
+            let witch_pupil_r = world.spawn((
+                Transform::new().with_scale(Vec3::fill(0.07)),
+                pupil_material,
+                Mesh::VERTICAL_QUAD,
+            ));
 
-        let witch_pupil_center_l = world.spawn((
-            Transform::new().with_position(Vec3::new(-0.08, -0.14, 0.0)),
-            Eye {
-                radius: 0.03,
-                range: f32::MAX,
-                art: witch_pupil_l,
-                other_eye: None,
-            },
-        ));
+            let witch_pupil_center_l = world.spawn((
+                Transform::new().with_position(Vec3::new(-0.08, -0.14, 0.0)),
+                Eye {
+                    radius: 0.03,
+                    range: f32::MAX,
+                    art: witch_pupil_l,
+                    other_eye: None,
+                },
+            ));
 
-        let witch_pupil_center_r = world.spawn((
-            Transform::new().with_position(Vec3::new(0.12, -0.14, 0.0)),
-            Eye {
-                radius: 0.03,
-                range: f32::MAX,
-                art: witch_pupil_r,
-                other_eye: Some(witch_pupil_center_l),
-            },
-        ));
-        world
-            .get::<&mut Eye>(witch_pupil_center_l)
-            .unwrap()
-            .other_eye = Some(witch_pupil_center_r);
+            let witch_pupil_center_r = world.spawn((
+                Transform::new().with_position(Vec3::new(0.12, -0.14, 0.0)),
+                Eye {
+                    radius: 0.03,
+                    range: f32::MAX,
+                    art: witch_pupil_r,
+                    other_eye: Some(witch_pupil_center_l),
+                },
+            ));
+            world
+                .get::<&mut Eye>(witch_pupil_center_l)
+                .unwrap()
+                .other_eye = Some(witch_pupil_center_r);
 
-        let _ = world.set_parent(witch, witch_pupil_center_l);
-        let _ = world.set_parent(witch, witch_pupil_center_r);
+            let _ = world.set_parent(witch, witch_pupil_center_l);
+            let _ = world.set_parent(witch, witch_pupil_center_r);
 
-        let _ = world.set_parent(witch_pupil_center_l, witch_pupil_l);
-        let _ = world.set_parent(witch_pupil_center_r, witch_pupil_r);
+            let _ = world.set_parent(witch_pupil_center_l, witch_pupil_l);
+            let _ = world.set_parent(witch_pupil_center_r, witch_pupil_r);
+        };
+        spawn_witch();
 
         let peg_color = Color::GREEN.with_lightness(0.8).with_chroma(0.4);
 
@@ -406,19 +408,21 @@ fn main() {
         let gold_material = load_peg_material(resources, &recolor_shader, Color::YELLOW);
 
         resources.add(GameAssets {
-            stem_material: _stem_material,
+            stem_material,
             growable_plant_material,
             plant_material,
             gold_material,
         });
 
-        for _ in 0..10 {
+        for _ in 0..3 {
             spawn_growable_plant_peg(
                 world,
                 resources,
-                Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..30.0)),
+                Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..-20.)),
             );
         }
+
+        let mut ui = ui::UI::new(world, resources);
 
         // This function will run for major events liked a FixedUpdate occuring
         // and for any input events from the application.
@@ -438,7 +442,10 @@ fn main() {
 
                 rapier_integration.step(world);
             }
+
             Event::Draw => {
+                ui.run(world, resources);
+
                 run_eyes(world, resources);
                 run_scale(world, resources);
                 temporary::despawn_temporaries(world);
@@ -447,9 +454,9 @@ fn main() {
                 let (x, y) = input.pointer_position();
 
                 pointer_position = {
-                    let mut q = world.query::<(&mut GlobalTransform, &Camera)>();
-                    let mut iter = q.iter();
-                    let (camera_transform, camera) = iter.next().unwrap().1;
+                    let (camera_transform, camera) = world
+                        .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
+                        .unwrap();
 
                     let view_size = resources.get::<kapp::Window>().size();
                     let ray = camera.view_to_ray(
@@ -502,9 +509,9 @@ fn main() {
                 let mut rapier_integration = resources.get::<RapierIntegration>();
 
                 pointer_position = {
-                    let mut q = world.query::<(&mut GlobalTransform, &Camera)>();
-                    let mut iter = q.iter();
-                    let (camera_transform, camera) = iter.next().unwrap().1;
+                    let (camera_transform, camera) = world
+                        .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
+                        .unwrap();
 
                     let view_size = resources.get::<kapp::Window>().size();
                     let ray = camera.view_to_ray(

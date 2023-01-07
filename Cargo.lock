@@ -162,6 +162,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90e5c1c8368803113bf0c9584fc495a58b86dc8a29edbf8fe877d21d9507e797"
 
 [[package]]
+name = "fontdb"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01b07f5c05414a0d8caba4c17eef8dc8b5c8955fc7c68d324191c7a56d3f3449"
+dependencies = [
+ "log",
+ "memmap2",
+ "ttf-parser",
+]
+
+[[package]]
+name = "fontdue"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f716db304dca2e287fea5c7e3a22dac3eac9050f9bae143aa424ac2815494475"
+dependencies = [
+ "hashbrown 0.11.2",
+ "ttf-parser",
+]
+
+[[package]]
 name = "getrandom"
 version = "0.2.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +200,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c467d36af040b7b2681f5fddd27427f6da8d3d072f575a265e181d2f8e8d157"
 dependencies = [
  "crunchy",
+]
+
+[[package]]
+name = "hashbrown"
+version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab5ef0d4909ef3724cc8cce6ccc8572c5c817592e9285f5464f8e86f8bd3726e"
+dependencies = [
+ "ahash",
 ]
 
 [[package]]
@@ -202,7 +232,7 @@ version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6530b5d25416ece146739e6130f7f7e39f9ee3435236be32b6774f548d76aac"
 dependencies = [
- "hashbrown",
+ "hashbrown 0.12.3",
  "spin",
 ]
 
@@ -289,9 +319,34 @@ dependencies = [
 name = "kcolor"
 version = "0.1.0"
 dependencies = [
+ "kecs",
  "kmath",
  "kolor",
  "kserde",
+]
+
+[[package]]
+name = "kecs"
+version = "0.1.0"
+dependencies = [
+ "kecs_derive",
+ "ktasks",
+]
+
+[[package]]
+name = "kecs_derive"
+version = "0.1.0"
+dependencies = [
+ "kecs_derive_impl",
+ "kreflect_common",
+ "kserde_derive_impl",
+]
+
+[[package]]
+name = "kecs_derive_impl"
+version = "0.1.0"
+dependencies = [
+ "kreflect_common",
 ]
 
 [[package]]
@@ -579,6 +634,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "kui"
+version = "0.1.0"
+dependencies = [
+ "fontdb",
+ "fontdue",
+ "kapp_platform_common",
+ "kcolor",
+ "kmath",
+ "kwasm",
+ "rect_packer",
+]
+
+[[package]]
 name = "kwasm"
 version = "0.1.0"
 dependencies = [
@@ -596,6 +664,7 @@ name = "ld52"
 version = "0.1.0"
 dependencies = [
  "koi3",
+ "kui",
  "rapier2d",
 ]
 
@@ -610,6 +679,15 @@ name = "libm"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "348108ab3fba42ec82ff6e9564fc4ca0247bdccdc68dd8af9764bbc79c3c8ffb"
+
+[[package]]
+name = "log"
+version = "0.4.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
+dependencies = [
+ "cfg-if",
+]
 
 [[package]]
 name = "malloc_buf"
@@ -627,6 +705,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "add85d4dd35074e6fedc608f8c8f513a3548619a9024b751949ef0e8e45a4d84"
 dependencies = [
  "rawpointer",
+]
+
+[[package]]
+name = "memmap2"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b182332558b18d807c4ce1ca8ca983b34c3ee32765e47b3f0f69b90355cc1dc"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -858,6 +945,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
 
 [[package]]
+name = "rect_packer"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8ffb4dfda4b01cc420847665dc480760d596ce186f2772a66ed32fe9acb1c45"
+
+[[package]]
 name = "robust"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -940,6 +1033,12 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
+
+[[package]]
+name = "ttf-parser"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ae2f58a822f08abdaf668897e96a5656fe72f5a9ce66422423e8849384872e6"
 
 [[package]]
 name = "typenum"
