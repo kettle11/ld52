@@ -22,6 +22,7 @@ struct LevelState {
     victory: bool,
     fired_once: bool,
     multiplier: f32,
+    screen_shake_enabled: bool,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -201,6 +202,7 @@ impl LevelState {
             victory: false,
             fired_once: false,
             multiplier: 1.0,
+            screen_shake_enabled: true,
         }
     }
 
@@ -910,7 +912,7 @@ fn main() {
             let level_state = LevelState::new(shop_world);
             resources.add(level_state);
 
-            let mut subtract_gold_timer = 1.5;
+            let mut subtract_gold_timer = 1.0;
 
             // This function will run for major events liked a FixedUpdate occuring
             // and for any input events from the application.
@@ -991,6 +993,11 @@ fn main() {
                     }
                     resources.add(level_state);
                 }
+                Event::KappEvent(KappEvent::KeyDown { key: Key::O, .. }) => {
+                    // Toggle screen shake
+                    let mut level_state = resources.get::<LevelState>();
+                    level_state.screen_shake_enabled = !level_state.screen_shake_enabled;
+                }
                 Event::Draw => {
                     {
                         let mut level_state = resources.get::<LevelState>();
@@ -998,21 +1005,30 @@ fn main() {
                         let mut ui_state = resources.get::<UIState>();
                         if ui_state.incoming_gold > 0 {
                             if subtract_gold_timer < 0.0 {
-                                ui_state.incoming_gold -= 1;
-                                ui_state.gold += 1;
-                                subtract_gold_timer = 0.2;
-                                level_state.screen_shake_amount += 0.1;
+                                let gold_change_speed = (ui_state.incoming_gold / 50)
+                                    .max(1)
+                                    .min(ui_state.incoming_gold);
+
+                                ui_state.incoming_gold -= gold_change_speed;
+                                ui_state.gold += gold_change_speed;
+
+                                subtract_gold_timer = 0.01;
+                                //level_state.screen_shake_amount += 0.01;
                             } else {
-                                subtract_gold_timer -= 30.0 / 60.0;
+                                subtract_gold_timer -= 1.0 / 60.0;
                             }
                         } else {
-                            subtract_gold_timer = 2.0;
+                            subtract_gold_timer = 1.0;
                         }
 
-                        let screen_shake_amount = &mut level_state.screen_shake_amount;
+                        let mut screen_shake_amount = level_state.screen_shake_amount;
+
+                        if !level_state.screen_shake_enabled {
+                            screen_shake_amount = 0.0;
+                        }
                         let screen_shake = Vec2::new(
-                            random.range_f32(-*screen_shake_amount..*screen_shake_amount),
-                            random.range_f32(-*screen_shake_amount..*screen_shake_amount),
+                            random.range_f32(-screen_shake_amount..screen_shake_amount),
+                            random.range_f32(-screen_shake_amount..screen_shake_amount),
                         );
 
                         let mut q = world.query::<(&mut Transform, &MainCamera)>();
@@ -1020,7 +1036,8 @@ fn main() {
                         let (camera_transform, ..) = iter.next().unwrap().1;
                         camera_transform.position =
                             screen_shake.extend(camera_transform.position.z);
-                        *screen_shake_amount *= 0.94;
+                        screen_shake_amount *= 0.94;
+                        level_state.screen_shake_amount = screen_shake_amount;
                     }
 
                     if !world
