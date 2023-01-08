@@ -6,21 +6,25 @@ mod temporary;
 use koi_graphics_context::BlendFactor;
 use temporary::*;
 mod ui;
+use ui::*;
 
 struct LevelState {
     pitch_multiplier: f32,
     aiming: bool,
     ready_to_shoot: bool,
     collected_pegs: Vec<Entity>,
+    other_world: World,
 }
 
+struct MouseFocalPoint;
 impl LevelState {
-    pub fn new() -> Self {
+    pub fn new(other_world: World) -> Self {
         Self {
             pitch_multiplier: 1.0,
             aiming: true,
             ready_to_shoot: true,
             collected_pegs: Vec::new(),
+            other_world,
         }
     }
     pub fn prepare_to_shoot(&mut self, world: &mut World) {
@@ -78,7 +82,7 @@ impl LevelState {
                                 }
 
                                 for i in 0..segment_count {
-                                    let range = std::f32::consts::PI * 0.2;
+                                    let range = std::f32::consts::PI * 0.4;
                                     let rotation = range * -1.0 + Random::new().f32() * range * 2.0;
 
                                     let rotation = Quat::from_angle_axis(rotation, Vec3::Z);
@@ -139,6 +143,7 @@ struct GameAssets {
     growable_plant_material: PegMaterial,
     plant_material: PegMaterial,
     gold_material: PegMaterial,
+    stone_material: PegMaterial,
 }
 
 struct PegMaterial {
@@ -147,7 +152,7 @@ struct PegMaterial {
     shockwave: Handle<Material>,
 }
 
-const SHOT_POWER: f32 = 70.0;
+const SHOT_POWER: f32 = 80.0;
 
 struct EyeFocalPoint;
 
@@ -212,342 +217,427 @@ fn run_scale(world: &mut World, resources: &Resources) {
 }
 
 fn main() {
-    App::default().setup_and_run(|world, resources| {
-        let rapier_integration = rapier_integration::RapierIntegration::new();
+    App::default()
+        .with_resource(InitialSettings {
+            window_width: 1600,
+            window_height: 1200,
+            ..Default::default()
+        })
+        .setup_and_run(|world, resources| {
+            let rapier_integration = rapier_integration::RapierIntegration::new();
 
-        let view_height = 100.0;
-        let camera_entity = world.spawn((
-            Transform::new().with_position(Vec3::Z * 2.0),
-            Camera {
-                clear_color: Some(Color::BLACK),
-                exposure: Exposure::EV100(6.0),
-                projection_mode: ProjectionMode::Orthographic {
-                    height: view_height,
-                    z_near: -2.0,
-                    z_far: 2.0,
+            let view_height = 150.0;
+            let camera_entity = world.spawn((
+                Transform::new().with_position(Vec3::Z * 2.0),
+                Camera {
+                    clear_color: Some(Color::BLACK),
+                    exposure: Exposure::EV100(6.0),
+                    projection_mode: ProjectionMode::Orthographic {
+                        height: view_height,
+                        z_near: -2.0,
+                        z_far: 2.0,
+                    },
+                    ..Default::default()
                 },
-                ..Default::default()
-            },
-        ));
+            ));
 
-        let top_of_screen = Vec3::new(0.0, view_height / 2.0 * 0.75, 0.0);
+            let top_of_screen = Vec3::new(0.0, view_height / 2.0 * 0.75, 0.0);
 
-        // Spawn the background
-        {
-            let new_texture = resources.get::<AssetStore<Texture>>().load(
-                "assets/fantasy_farm_background.png",
-                koi_graphics_context::TextureSettings::default(),
-            );
+            // Spawn the background
+            {
+                let new_texture = resources.get::<AssetStore<Texture>>().load(
+                    "assets/BackgroundWide.png",
+                    koi_graphics_context::TextureSettings::default(),
+                );
 
-            let new_material = resources.get::<AssetStore<Material>>().add(Material {
+                let new_material = resources.get::<AssetStore<Material>>().add(Material {
+                    shader: Shader::UNLIT,
+                    base_color_texture: Some(new_texture),
+                    ..Default::default()
+                });
+
+                world.spawn((
+                    Transform::new().with_scale(Vec3::new(160.0 * 2.0, 160.0, 1.0)),
+                    Mesh::VERTICAL_QUAD,
+                    new_material,
+                ));
+            }
+
+            let stem_material = resources.get::<AssetStore<Material>>().add(Material {
                 shader: Shader::UNLIT,
-                base_color_texture: Some(new_texture),
+                base_color: Color::from_srgb_hex(0x489B41, 1.0)
+                    .with_lightness(0.7)
+                    .with_chroma(0.3),
                 ..Default::default()
             });
 
-            world.spawn((
-                Transform::new().with_scale(Vec3::fill(100.0)),
-                Mesh::VERTICAL_QUAD,
-                new_material,
-            ));
-        }
-
-        let stem_material = resources.get::<AssetStore<Material>>().add(Material {
-            shader: Shader::UNLIT,
-            base_color: Color::from_srgb_hex(0x489B41, 1.0)
-                .with_lightness(0.7)
-                .with_chroma(0.3),
-            ..Default::default()
-        });
-
-        let recolor_shader = resources.get::<AssetStore<Shader>>().load(
-            "assets/custom_shader.glsl",
-            ShaderSettings {
-                blending: Some((BlendFactor::One, BlendFactor::OneMinusSourceAlpha)),
-                ..Default::default()
-            },
-        );
-
-        fn get_texture_material(
-            path: &str,
-            resources: &Resources,
-            shader: Handle<Shader>,
-            color: Color,
-        ) -> Handle<Material> {
-            let texture = resources
-                .get::<AssetStore<Texture>>()
-                .load(path, koi_graphics_context::TextureSettings::default());
-            resources.get::<AssetStore<Material>>().add(Material {
-                shader,
-                base_color_texture: Some(texture),
-                base_color: color,
-                ..Default::default()
-            })
-        }
-
-        fn load_peg_material(
-            resources: &mut Resources,
-            shader: &Handle<Shader>,
-            color: Color,
-        ) -> PegMaterial {
-            PegMaterial {
-                glowing: get_texture_material(
-                    "assets/PegGlowing.png",
-                    resources,
-                    shader.clone(),
-                    color,
-                ),
-                shockwave: get_texture_material(
-                    "assets/PegShockWave.png",
-                    resources,
-                    shader.clone(),
-                    color,
-                ),
-                base: get_texture_material("assets/Peg.png", resources, shader.clone(), color),
-            }
-        }
-
-        let mut spawn_witch = || {
-            let witch_material = get_texture_material(
-                "assets/Witch.png",
-                resources,
-                Shader::UNLIT_TRANSPARENT,
-                Color::WHITE,
-            );
-            let pupil_material = get_texture_material(
-                "assets/Pupil.png",
-                resources,
-                Shader::UNLIT_TRANSPARENT,
-                Color::WHITE,
-            );
-
-            let witch = world.spawn((
-                Transform::new()
-                    .with_position(top_of_screen + Vec3::Z * 0.2)
-                    .with_scale(Vec3::fill(25.0)),
-                witch_material,
-                Mesh::VERTICAL_QUAD,
-            ));
-
-            let witch_pupil_l = world.spawn((
-                Transform::new().with_scale(Vec3::fill(0.07)),
-                pupil_material.clone(),
-                Mesh::VERTICAL_QUAD,
-            ));
-            let witch_pupil_r = world.spawn((
-                Transform::new().with_scale(Vec3::fill(0.07)),
-                pupil_material,
-                Mesh::VERTICAL_QUAD,
-            ));
-
-            let witch_pupil_center_l = world.spawn((
-                Transform::new().with_position(Vec3::new(-0.08, -0.14, 0.0)),
-                Eye {
-                    radius: 0.03,
-                    range: f32::MAX,
-                    art: witch_pupil_l,
-                    other_eye: None,
+            let recolor_shader = resources.get::<AssetStore<Shader>>().load(
+                "assets/custom_shader.glsl",
+                ShaderSettings {
+                    blending: Some((BlendFactor::One, BlendFactor::OneMinusSourceAlpha)),
+                    ..Default::default()
                 },
-            ));
-
-            let witch_pupil_center_r = world.spawn((
-                Transform::new().with_position(Vec3::new(0.12, -0.14, 0.0)),
-                Eye {
-                    radius: 0.03,
-                    range: f32::MAX,
-                    art: witch_pupil_r,
-                    other_eye: Some(witch_pupil_center_l),
-                },
-            ));
-            world
-                .get::<&mut Eye>(witch_pupil_center_l)
-                .unwrap()
-                .other_eye = Some(witch_pupil_center_r);
-
-            let _ = world.set_parent(witch, witch_pupil_center_l);
-            let _ = world.set_parent(witch, witch_pupil_center_r);
-
-            let _ = world.set_parent(witch_pupil_center_l, witch_pupil_l);
-            let _ = world.set_parent(witch_pupil_center_r, witch_pupil_r);
-        };
-        spawn_witch();
-
-        let peg_color = Color::GREEN.with_lightness(0.8).with_chroma(0.4);
-
-        let ball_material = get_texture_material(
-            "assets/Ball.png",
-            resources,
-            recolor_shader.clone(),
-            Color::RED,
-        );
-
-        let peg_hit_sound = resources
-            .get::<AssetStore<Sound>>()
-            .load("assets/marimba.wav", Default::default());
-
-        let ball_bundle = (
-            Transform::new().with_scale(Vec3::fill(3.5)),
-            Mesh::VERTICAL_QUAD,
-            ball_material,
-        );
-
-        let mouse_focal_point = world.spawn((Transform::new(), EyeFocalPoint));
-
-        //world.spawn(ball_bundle);
-
-        let mut random = Random::new();
-
-        resources.add(rapier_integration);
-
-        resources.add(LevelState::new());
-
-        let mut pointer_position = Vec3::ZERO;
-
-        let growable_plant_material = load_peg_material(resources, &recolor_shader, Color::ORANGE);
-        let plant_material = load_peg_material(resources, &recolor_shader, Color::GREEN);
-        let gold_material = load_peg_material(resources, &recolor_shader, Color::YELLOW);
-
-        resources.add(GameAssets {
-            stem_material,
-            growable_plant_material,
-            plant_material,
-            gold_material,
-        });
-
-        for _ in 0..3 {
-            spawn_growable_plant_peg(
-                world,
-                resources,
-                Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..-20.)),
             );
-        }
 
-        let mut ui = ui::UI::new(world, resources);
-
-        // This function will run for major events liked a FixedUpdate occuring
-        // and for any input events from the application.
-        // See [koi::Event]
-        move |event, world, resources| match event {
-            Event::FixedUpdate => {
-                temporary::run_delayed_actions(world, resources);
-
-                // Update the shot visual
-
-                run_balls(world, resources, -view_height / 2.0);
-                run_pegs(world, resources, &peg_hit_sound);
-                run_health(world, resources);
-
-                let mut rapier_integration =
-                    resources.get::<rapier_integration::RapierIntegration>();
-
-                rapier_integration.step(world);
+            fn get_texture_material(
+                path: &str,
+                resources: &Resources,
+                shader: Handle<Shader>,
+                color: Color,
+            ) -> Handle<Material> {
+                let texture = resources
+                    .get::<AssetStore<Texture>>()
+                    .load(path, koi_graphics_context::TextureSettings::default());
+                resources.get::<AssetStore<Material>>().add(Material {
+                    shader,
+                    base_color_texture: Some(texture),
+                    base_color: color,
+                    ..Default::default()
+                })
             }
 
-            Event::Draw => {
-                ui.run(world, resources);
-
-                run_eyes(world, resources);
-                run_scale(world, resources);
-                temporary::despawn_temporaries(world);
-
-                let input = resources.get::<Input>();
-                let (x, y) = input.pointer_position();
-
-                pointer_position = {
-                    let (camera_transform, camera) = world
-                        .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
-                        .unwrap();
-
-                    let view_size = resources.get::<kapp::Window>().size();
-                    let ray = camera.view_to_ray(
-                        camera_transform,
-                        x as _,
-                        y as _,
-                        view_size.0 as _,
-                        view_size.1 as _,
-                    );
-                    ray.origin
-                };
-                pointer_position.z = 0.0;
-
-                world
-                    .get::<&mut Transform>(mouse_focal_point)
-                    .unwrap()
-                    .position = pointer_position;
-
-                let dir = (pointer_position - top_of_screen).normalized();
-
-                let velocity = dir * SHOT_POWER;
-
-                let mut v = velocity;
-                let mut p = top_of_screen;
-
-                let steps = 10;
-                let step_length = 0.3 / steps as f32;
-
-                for _ in 0..steps {
-                    p += v * step_length;
-                    v += Vec3::Y * 4.0 * -9.81 * step_length;
-
-                    p.z = 0.2;
-
-                    world.spawn((
-                        Temporary(2),
-                        Mesh::VERTICAL_CIRCLE,
-                        Material::UNLIT,
-                        Transform::new().with_position(p),
-                    ));
+            fn load_peg_material(
+                resources: &mut Resources,
+                shader: &Handle<Shader>,
+                color: Color,
+            ) -> PegMaterial {
+                PegMaterial {
+                    glowing: get_texture_material(
+                        "assets/PegGlowing.png",
+                        resources,
+                        shader.clone(),
+                        color,
+                    ),
+                    shockwave: get_texture_material(
+                        "assets/PegShockWave.png",
+                        resources,
+                        shader.clone(),
+                        color,
+                    ),
+                    base: get_texture_material("assets/Peg.png", resources, shader.clone(), color),
                 }
             }
 
-            Event::KappEvent(KappEvent::PointerDown {
-                x,
-                y,
-                button: PointerButton::Primary,
-                ..
-            }) => {
-                let mut rapier_integration = resources.get::<RapierIntegration>();
+            let mut ui = ui::UI::new(world, resources);
 
-                pointer_position = {
-                    let (camera_transform, camera) = world
-                        .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
+            let mut spawn_witch = |world: &mut World| {
+                let witch_material = get_texture_material(
+                    "assets/Witch.png",
+                    resources,
+                    Shader::UNLIT_TRANSPARENT,
+                    Color::WHITE,
+                );
+                let pupil_material = get_texture_material(
+                    "assets/Pupil.png",
+                    resources,
+                    Shader::UNLIT_TRANSPARENT,
+                    Color::WHITE,
+                );
+
+                let witch = world.spawn((
+                    Transform::new()
+                        .with_position(top_of_screen + Vec3::Z * 0.2)
+                        .with_scale(Vec3::fill(25.0)),
+                    witch_material,
+                    Mesh::VERTICAL_QUAD,
+                ));
+
+                let witch_pupil_l = world.spawn((
+                    Transform::new().with_scale(Vec3::fill(0.07)),
+                    pupil_material.clone(),
+                    Mesh::VERTICAL_QUAD,
+                ));
+                let witch_pupil_r = world.spawn((
+                    Transform::new().with_scale(Vec3::fill(0.07)),
+                    pupil_material,
+                    Mesh::VERTICAL_QUAD,
+                ));
+
+                let witch_pupil_center_l = world.spawn((
+                    Transform::new().with_position(Vec3::new(-0.08, -0.14, 0.0)),
+                    Eye {
+                        radius: 0.03,
+                        range: f32::MAX,
+                        art: witch_pupil_l,
+                        other_eye: None,
+                    },
+                ));
+
+                let witch_pupil_center_r = world.spawn((
+                    Transform::new().with_position(Vec3::new(0.12, -0.14, 0.0)),
+                    Eye {
+                        radius: 0.03,
+                        range: f32::MAX,
+                        art: witch_pupil_r,
+                        other_eye: Some(witch_pupil_center_l),
+                    },
+                ));
+                world
+                    .get::<&mut Eye>(witch_pupil_center_l)
+                    .unwrap()
+                    .other_eye = Some(witch_pupil_center_r);
+
+                let _ = world.set_parent(witch, witch_pupil_center_l);
+                let _ = world.set_parent(witch, witch_pupil_center_r);
+
+                let _ = world.set_parent(witch_pupil_center_l, witch_pupil_l);
+                let _ = world.set_parent(witch_pupil_center_r, witch_pupil_r);
+            };
+            spawn_witch(world);
+
+            let mut shop_world = World::new();
+            let camera_entity = shop_world.spawn((
+                Transform::new().with_position(Vec3::Z * 2.0),
+                Camera {
+                    clear_color: Some(Color::BLACK),
+                    exposure: Exposure::EV100(6.0),
+                    projection_mode: ProjectionMode::Orthographic {
+                        height: 150.0,
+                        z_near: -2.0,
+                        z_far: 2.0,
+                    },
+                    ..Default::default()
+                },
+            ));
+
+            shop_world.spawn((Transform::new(), EyeFocalPoint, MouseFocalPoint));
+            shop_world.spawn((RapierIntegration::new(),));
+            spawn_witch(&mut shop_world);
+            ui.add_to_world(&mut shop_world);
+
+            // Spawn the shop background
+            {
+                let new_texture = resources.get::<AssetStore<Texture>>().load(
+                    "assets/ShopBackground.png",
+                    koi_graphics_context::TextureSettings::default(),
+                );
+
+                let new_material = resources.get::<AssetStore<Material>>().add(Material {
+                    shader: Shader::UNLIT,
+                    base_color_texture: Some(new_texture),
+                    ..Default::default()
+                });
+
+                shop_world.spawn((
+                    Transform::new().with_scale(Vec3::new(160.0 * 2.0, 160.0, 1.0)),
+                    Mesh::VERTICAL_QUAD,
+                    new_material,
+                ));
+            }
+
+            let peg_color = Color::GREEN.with_lightness(0.8).with_chroma(0.4);
+
+            let ball_material = get_texture_material(
+                "assets/Ball.png",
+                resources,
+                recolor_shader.clone(),
+                Color::RED,
+            );
+
+            let peg_hit_sound = resources
+                .get::<AssetStore<Sound>>()
+                .load("assets/marimba.wav", Default::default());
+
+            let ball_bundle = (
+                Transform::new().with_scale(Vec3::fill(3.5)),
+                Mesh::VERTICAL_QUAD,
+                ball_material,
+            );
+
+            world.spawn((Transform::new(), EyeFocalPoint, MouseFocalPoint));
+
+            //world.spawn(ball_bundle);
+
+            let mut random = Random::new();
+
+            world.spawn((rapier_integration,));
+
+            let mut level_state = LevelState::new(shop_world);
+            resources.add(level_state);
+
+            let mut pointer_position = Vec3::ZERO;
+
+            let growable_plant_material =
+                load_peg_material(resources, &recolor_shader, Color::ORANGE);
+            let plant_material = load_peg_material(resources, &recolor_shader, Color::GREEN);
+            let gold_material = load_peg_material(resources, &recolor_shader, Color::YELLOW);
+            let stone_material =
+                load_peg_material(resources, &recolor_shader, Color::BLACK.with_lightness(0.6));
+
+            resources.add(GameAssets {
+                stem_material,
+                growable_plant_material,
+                plant_material,
+                gold_material,
+                stone_material: stone_material,
+            });
+
+            for _ in 0..3 {
+                spawn_growable_plant_peg(
+                    world,
+                    resources,
+                    Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..-20.)),
+                );
+            }
+            for _ in 0..20 {
+                spawn_peg(
+                    world,
+                    resources,
+                    Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..10.)),
+                    PegType::Stone,
+                );
+            }
+
+            // This function will run for major events liked a FixedUpdate occuring
+            // and for any input events from the application.
+            // See [koi::Event]
+            move |event, world, resources| match event {
+                Event::FixedUpdate => {
+                    temporary::run_delayed_actions(world, resources);
+
+                    // Update the shot visual
+
+                    run_balls(world, resources, -view_height / 2.0);
+                    run_pegs(world, resources, &peg_hit_sound);
+                    run_health(world, resources);
+
+                    let rapier_integration = world
+                        .query::<&mut RapierIntegration>()
+                        .iter()
+                        .next()
+                        .unwrap()
+                        .0;
+                    let mut rapier_integration = world
+                        .remove_one::<RapierIntegration>(rapier_integration)
                         .unwrap();
 
-                    let view_size = resources.get::<kapp::Window>().size();
-                    let ray = camera.view_to_ray(
-                        camera_transform,
-                        *x as _,
-                        *y as _,
-                        view_size.0 as _,
-                        view_size.1 as _,
+                    rapier_integration.step(world);
+                    world.spawn((rapier_integration,));
+                }
+                Event::KappEvent(KappEvent::KeyDown { key: Key::A, .. }) => {
+                    let mut level_state = resources.get::<LevelState>();
+                    std::mem::swap(world, &mut level_state.other_world);
+                }
+
+                Event::Draw => {
+                    ui.run(world, resources);
+
+                    run_eyes(world, resources);
+                    run_scale(world, resources);
+                    temporary::despawn_temporaries(world);
+
+                    let input = resources.get::<Input>();
+                    let (x, y) = input.pointer_position();
+
+                    pointer_position = {
+                        let (camera_transform, camera) = world
+                            .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
+                            .unwrap();
+
+                        let view_size = resources.get::<kapp::Window>().size();
+                        let ray = camera.view_to_ray(
+                            camera_transform,
+                            x as _,
+                            y as _,
+                            view_size.0 as _,
+                            view_size.1 as _,
+                        );
+                        ray.origin
+                    };
+                    pointer_position.z = 0.0;
+
+                    world
+                        .query::<With<&mut Transform, &MouseFocalPoint>>()
+                        .iter()
+                        .next()
+                        .unwrap()
+                        .1
+                        .position = pointer_position;
+
+                    let dir = (pointer_position - top_of_screen).normalized();
+
+                    let velocity = dir * SHOT_POWER;
+
+                    let mut v = velocity;
+                    let mut p = top_of_screen;
+
+                    let steps = 10;
+                    let step_length = 0.3 / steps as f32;
+
+                    for _ in 0..steps {
+                        p += v * step_length;
+                        v += Vec3::Y * GRAVITY * step_length;
+
+                        p.z = 0.2;
+
+                        world.spawn((
+                            Temporary(2),
+                            Mesh::VERTICAL_CIRCLE,
+                            Material::UNLIT,
+                            Transform::new().with_position(p),
+                        ));
+                    }
+                }
+
+                Event::KappEvent(KappEvent::PointerDown {
+                    x,
+                    y,
+                    button: PointerButton::Primary,
+                    ..
+                }) => {
+                    resources.get::<UIState>().gold -= 1;
+
+                    let rapier_integration = world
+                        .query::<&mut RapierIntegration>()
+                        .iter()
+                        .next()
+                        .unwrap()
+                        .0;
+                    let mut rapier_integration = world
+                        .remove_one::<RapierIntegration>(rapier_integration)
+                        .unwrap();
+
+                    pointer_position = {
+                        let (camera_transform, camera) = world
+                            .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
+                            .unwrap();
+
+                        let view_size = resources.get::<kapp::Window>().size();
+                        let ray = camera.view_to_ray(
+                            camera_transform,
+                            *x as _,
+                            *y as _,
+                            view_size.0 as _,
+                            view_size.1 as _,
+                        );
+                        ray.origin
+                    };
+
+                    let dir = (pointer_position - top_of_screen).normalized() * SHOT_POWER;
+
+                    let rapier_handle = rapier_integration.add_rigid_body_with_collider(
+                        RigidBodyBuilder::dynamic()
+                            .linvel([dir.x, dir.y].into())
+                            .build(),
+                        ColliderBuilder::ball(0.5 * 3.5).restitution(0.7).build(),
                     );
-                    ray.origin
-                };
+                    let mut p = top_of_screen;
+                    p.z = 0.3;
+                    let b = (
+                        ball_bundle.0.with_position(p),
+                        ball_bundle.1.clone(),
+                        ball_bundle.2.clone(),
+                        Ball,
+                        EyeFocalPoint,
+                        rapier_handle,
+                    );
 
-                let dir = (pointer_position - top_of_screen).normalized() * SHOT_POWER;
-
-                let rapier_handle = rapier_integration.add_rigid_body_with_collider(
-                    RigidBodyBuilder::dynamic()
-                        .linvel([dir.x, dir.y].into())
-                        .build(),
-                    ColliderBuilder::ball(0.5 * 3.5).restitution(0.7).build(),
-                );
-                let mut p = top_of_screen;
-                p.z = 0.3;
-                let b = (
-                    ball_bundle.0.with_position(p),
-                    ball_bundle.1.clone(),
-                    ball_bundle.2.clone(),
-                    Ball,
-                    EyeFocalPoint,
-                    rapier_handle,
-                );
-
-                world.spawn(b);
+                    world.spawn(b);
+                    world.spawn((rapier_integration,));
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        });
 }
 
 #[derive(Clone)]
@@ -558,6 +648,7 @@ struct Peg {
     hit: bool,
     shockwave_child: Entity,
     glowing_material: Handle<Material>,
+    peg_type: PegType,
 }
 
 #[derive(Clone)]
@@ -588,7 +679,6 @@ fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
     }
 
     for e in to_despawn {
-        println!("DESPAWNING BALL");
         let _ = world.despawn(e);
     }
 
@@ -600,7 +690,16 @@ fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
 
 fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle<Sound>) {
     {
-        let rapier_integration = resources.get::<RapierIntegration>();
+        let rapier_integration = world
+            .query::<&mut RapierIntegration>()
+            .iter()
+            .next()
+            .unwrap()
+            .0;
+        let rapier_integration = world
+            .remove_one::<RapierIntegration>(rapier_integration)
+            .unwrap();
+
         let sounds = resources.get::<AssetStore<Sound>>();
         let mut audio_manager = resources.get::<AudioManager>();
 
@@ -642,6 +741,13 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
 
                             world.get::<&mut Scale>(peg.shockwave_child).unwrap().t = 0.5;
                             level_state.collected_pegs.push(entity);
+
+                            match peg.peg_type {
+                                PegType::Gold => {
+                                    resources.get::<UIState>().gold += 1;
+                                }
+                                _ => {}
+                            }
                         }
 
                         // Remove health as this ball touches the peg to prevent it from getting stuck.
@@ -650,13 +756,16 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
                 }
             }
         }
+        world.spawn((rapier_integration,));
     }
 }
 
+#[derive(Clone)]
 enum PegType {
     GrowablePlant,
     Plant,
     Gold,
+    Stone,
 }
 fn spawn_peg(
     world: &mut World,
@@ -666,12 +775,14 @@ fn spawn_peg(
 ) -> Entity {
     let game_assets = resources.get::<GameAssets>();
 
-    let mut rapier_integration = resources.get::<rapier_integration::RapierIntegration>();
-
-    let rapier_handle = rapier_integration.add_rigid_body_with_collider(
-        RigidBodyBuilder::kinematic_position_based().build(),
-        ColliderBuilder::ball(0.5 * 3.8).restitution(0.7).build(),
-    );
+    let rapier_handle = {
+        let mut q = world.query::<&mut RapierIntegration>();
+        let rapier_integration = q.iter().next().unwrap().1;
+        rapier_integration.add_rigid_body_with_collider(
+            RigidBodyBuilder::kinematic_position_based().build(),
+            ColliderBuilder::ball(0.5 * 3.8).restitution(0.7).build(),
+        )
+    };
 
     let PegMaterial {
         base,
@@ -681,6 +792,7 @@ fn spawn_peg(
         PegType::GrowablePlant => &game_assets.growable_plant_material,
         PegType::Plant => &game_assets.plant_material,
         PegType::Gold => &game_assets.gold_material,
+        PegType::Stone => &game_assets.stone_material,
     };
 
     let child = world.spawn((
@@ -706,6 +818,7 @@ fn spawn_peg(
             hit: false,
             glowing_material: glowing.clone(),
             shockwave_child: child,
+            peg_type,
         },
         Health(1.0),
         base.clone(),

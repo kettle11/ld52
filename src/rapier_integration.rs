@@ -22,10 +22,12 @@ pub struct RapierIntegration {
     query_pipeline: QueryPipeline,
 }
 
+pub const GRAVITY: f32 = -9.81 * 8.0;
+
 impl RapierIntegration {
     pub fn new() -> Self {
         Self {
-            gravity: Vec2::new(0.0, -9.81 * 4.0),
+            gravity: Vec2::new(0.0, GRAVITY),
             integration_parameters: IntegrationParameters::default(),
             physics_pipeline: PhysicsPipeline::new(),
             island_manager: IslandManager::new(),

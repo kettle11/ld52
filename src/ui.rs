@@ -12,13 +12,35 @@ pub struct UI {
     ui_mesh: Handle<Mesh>,
 }
 
-struct UIState {
-    current_text: String,
+pub struct UIState {
+    pub current_text: String,
+    pub gold: i32,
 }
+
 impl UI {
+    pub fn add_to_world(&self, world: &mut World) {
+        let projection_matrix =
+            koi3::projection_matrices::orthographic_gl(-1.0, 1.0, -1.0, 1.0, 0.0, 1.0);
+        world.spawn((
+            Transform::new(),
+            Camera {
+                clear_color: None,
+                projection_mode: ProjectionMode::Custom(projection_matrix),
+                ..Default::default()
+            },
+            RenderFlags::USER_INTERFACE,
+        ));
+        world.spawn((
+            Transform::new(),
+            self.ui_mesh.clone(),
+            self.ui_material.clone(),
+            RenderFlags::USER_INTERFACE,
+        ));
+    }
     pub fn new(world: &mut World, resources: &mut Resources) -> Self {
         resources.add(UIState {
             current_text: "Welcome to the farm!".to_string(),
+            gold: 20,
         });
 
         let projection_matrix =
@@ -71,20 +93,32 @@ impl UI {
 
         use kui::*;
 
-        let ui = align(
-            Alignment::End,
-            Alignment::Start,
-            row((
-                colored_rectangle(Vec2::new(50.0, 0.0), |_, _, _| Color::TRANSPARENT),
-                padding(fit(stack((
-                    rounded_fill(
-                        |_, _, c: &StandardContext<_>| Color::from_srgb_hex(0xD9D9D9, 1.0),
-                        |_, c| c.standard_style().rounding,
-                    ),
-                    padding(text(|state: &mut UIState| state.current_text.clone())),
-                )))),
-            )),
-        );
+        let ui = stack((
+            padding(fit(stack((
+                rounded_fill(
+                    |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
+                    |_, c| c.standard_style().rounding,
+                ),
+                padding_with_amount(
+                    |_| 20.0,
+                    text(|state: &mut UIState| format!("Gold: {:?}", state.gold)),
+                ),
+            )))),
+            align(
+                Alignment::End,
+                Alignment::Start,
+                row((
+                    colored_rectangle(Vec2::new(50.0, 0.0), |_, _, _| Color::TRANSPARENT),
+                    padding(fit(stack((
+                        rounded_fill(
+                            |_, _, c: &StandardContext<_>| Color::from_srgb_hex(0xECCAC1, 1.0),
+                            |_, c| c.standard_style().rounding,
+                        ),
+                        padding(text(|state: &mut UIState| state.current_text.clone())),
+                    )))),
+                )),
+            ),
+        ));
 
         Self {
             drawer: kui::Drawer::new(),
