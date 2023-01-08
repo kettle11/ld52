@@ -33,11 +33,12 @@ enum Effects {
     MultiBallStorm,
     MultiplierStorm,
     RockWall,
+    RocksToMultiball,
 }
 
 const BIG_BALL: Powerup = Powerup {
-    cost: 10,
-    description: "2x Size",
+    cost: 3,
+    description: "Bigger Ball",
     effect: Effects::BigBall,
 };
 const ROCK_STORM: Powerup = Powerup {
@@ -47,14 +48,20 @@ const ROCK_STORM: Powerup = Powerup {
 };
 
 const SEED_FRENZY: Powerup = Powerup {
-    cost: 10,
+    cost: 20,
     description: "Plant a Seed",
     effect: Effects::SeedStorm,
 };
 const ROCKS_TO_GOLD: Powerup = Powerup {
-    cost: 100,
+    cost: 700,
     description: "Rocks To Gold",
     effect: Effects::RocksToGold,
+};
+
+const ROCKS_TO_MULTIBALL: Powerup = Powerup {
+    cost: 15,
+    description: "Rocks To Multiball",
+    effect: Effects::RocksToMultiball,
 };
 
 const MULTIBALL_STORM: Powerup = Powerup {
@@ -64,7 +71,7 @@ const MULTIBALL_STORM: Powerup = Powerup {
 };
 
 const MULTIPLIER_STORM: Powerup = Powerup {
-    cost: 30,
+    cost: 15,
     description: "Multipliers!",
     effect: Effects::MultiplierStorm,
 };
@@ -75,7 +82,7 @@ const ROCK_WALL: Powerup = Powerup {
     effect: Effects::RockWall,
 };
 
-const POWERUPS: [Powerup; 7] = [
+const POWERUPS: [Powerup; 8] = [
     BIG_BALL,
     ROCK_STORM,
     ROCKS_TO_GOLD,
@@ -83,6 +90,7 @@ const POWERUPS: [Powerup; 7] = [
     MULTIBALL_STORM,
     MULTIPLIER_STORM,
     ROCK_WALL,
+    ROCKS_TO_MULTIBALL,
 ];
 
 struct MouseFocalPoint;
@@ -121,12 +129,11 @@ fn apply_rock_storm(
     }
 }
 
-pub fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources) {
+fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources, from: PegType, to: PegType) {
     let mut rocks = Vec::new();
     for (e, p) in world.query::<&Peg>().iter() {
-        match p.peg_type {
-            PegType::Stone => rocks.push(e),
-            _ => {}
+        if p.peg_type == from {
+            rocks.push(e)
         }
     }
 
@@ -139,9 +146,10 @@ pub fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources) {
             },
             time_offset,
         ),));
+        let to = to.clone();
         world.spawn((DelayedAction::new(
             move |world, resources| {
-                spawn_peg(world, resources, position.xy(), PegType::Gold);
+                spawn_peg(world, resources, position.xy(), to);
             },
             time_offset + 0.02,
         ),));
@@ -209,6 +217,7 @@ impl LevelState {
                     | Effects::SeedStorm
                     | Effects::MultiBallStorm
                     | Effects::MultiplierStorm
+                    | Effects::RocksToMultiball
                     | Effects::RockWall => true,
                     _ => false,
                 })
@@ -246,7 +255,12 @@ impl LevelState {
                             10.0,
                         )
                     }
-                    Effects::RocksToGold => apply_rocks_to_gold(world, resources),
+                    Effects::RocksToGold => {
+                        apply_rocks_to_gold(world, resources, PegType::Stone, PegType::Gold)
+                    }
+                    Effects::RocksToMultiball => {
+                        apply_rocks_to_gold(world, resources, PegType::Stone, PegType::MultiBall)
+                    }
                     Effects::SeedStorm => {
                         let mut random = Random::new();
                         let center =
@@ -941,7 +955,7 @@ fn main() {
                             PegType::MultiBall,
                             0.04,
                             0.0,
-                            60,
+                            10,
                             Vec2::ZERO,
                             15.0,
                         );
@@ -955,6 +969,17 @@ fn main() {
                             40,
                             Vec2::ZERO,
                             60.0,
+                        );
+
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::Plant,
+                            0.08,
+                            0.0,
+                            60,
+                            Vec2::ZERO,
+                            90.0,
                         );
                     }
                 }
@@ -1086,6 +1111,11 @@ fn main() {
                             return;
                         }
                     }
+                    if resources.get::<LevelState>().in_shop && resources.get::<UIState>().gold < 0
+                    {
+                        return;
+                    }
+
                     resources.get::<LevelState>().fired_once = true;
                     resources.get::<UIState>().gold -= 1;
 
@@ -1514,7 +1544,7 @@ fn select_powerup(world: &mut World) -> Option<Powerup> {
     Some(replacement_type)
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 enum PegType {
     GrowablePlant,
     Plant,
