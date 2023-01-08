@@ -312,7 +312,6 @@ version = "0.1.0"
 dependencies = [
  "hound",
  "kwasm",
- "wasm_set_stack_pointer",
 ]
 
 [[package]]
@@ -651,7 +650,6 @@ name = "kwasm"
 version = "0.1.0"
 dependencies = [
  "once_cell",
- "wasm_set_stack_pointer",
 ]
 
 [[package]]
@@ -1063,10 +1061,6 @@ name = "wasi"
 version = "0.11.0+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c8d87e72b64a3b4db28d11ce29237c246188f4f51057d65a7eab63b7987e423"
-
-[[package]]
-name = "wasm_set_stack_pointer"
-version = "0.1.0"
 
 [[package]]
 name = "wide"

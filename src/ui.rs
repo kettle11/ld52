@@ -15,6 +15,7 @@ pub struct UI {
 pub struct UIState {
     pub current_text: String,
     pub gold: i32,
+    pub incoming_gold: i32,
     pub hacky_remaining_health: i32,
 }
 
@@ -42,6 +43,7 @@ impl UI {
         resources.add(UIState {
             current_text: "Welcome to the farm!".to_string(),
             gold: 20,
+            incoming_gold: 0,
             hacky_remaining_health: 0,
         });
 
@@ -95,17 +97,53 @@ impl UI {
 
         use kui::*;
 
-        let ui = stack((
+        let center_text = toggle(
+            |ui_state: &UIState, _| ui_state.incoming_gold <= 0,
+            empty(),
             padding(fit(stack((
                 rounded_fill(
                     |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
                     |_, c| c.standard_style().rounding,
                 ),
-                padding_with_amount(
-                    |_| 20.0,
-                    text(|state: &mut UIState| format!("Gold: {:?}", state.gold)),
+                min_size(
+                    Vec3::new(150.0, 80.0, 1.0),
+                    padding_with_amount(
+                        |_| 10.0,
+                        center(Text::new(
+                            |ui_state: &mut UIState| format!("+ {:?}", ui_state.incoming_gold),
+                            |_, _, context: &StandardContext<_>| {
+                                context.standard_style().primary_font
+                            },
+                            |_, _, context: &StandardContext<_>| {
+                                context.standard_style().primary_text_color
+                            },
+                            |_, _, context: &StandardContext<_>| 40.0,
+                        )),
+                    ),
                 ),
             )))),
+        );
+
+        let ui = stack((
+            row((
+                padding(fit(stack((
+                    rounded_fill(
+                        |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
+                        |_, c| c.standard_style().rounding,
+                    ),
+                    padding_with_amount(
+                        |_| 20.0,
+                        text(|state: &mut UIState| format!("Gold: {:?}", state.gold)),
+                    ),
+                )))),
+                padding(fit(stack((
+                    rounded_fill(
+                        |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
+                        |_, c| c.standard_style().rounding,
+                    ),
+                    padding_with_amount(|_| 20.0, text("Press 'S' to open the shop")),
+                )))),
+            )),
             align(
                 Alignment::End,
                 Alignment::Start,
@@ -120,6 +158,7 @@ impl UI {
                     )))),
                 )),
             ),
+            center(center_text),
         ));
 
         Self {

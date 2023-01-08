@@ -19,38 +19,71 @@ struct LevelState {
     in_shop: bool,
     screen_shake_amount: f32,
     effects_to_apply_to_next_ball: Vec<Effects>,
+    victory: bool,
+    fired_once: bool,
+    multiplier: f32,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Debug)]
 enum Effects {
     BigBall,
     RockStorm,
     RocksToGold,
     SeedStorm,
+    MultiBallStorm,
+    MultiplierStorm,
+    RockWall,
 }
 
 const BIG_BALL: Powerup = Powerup {
-    cost: 1,
+    cost: 10,
     description: "2x Size",
     effect: Effects::BigBall,
 };
 const ROCK_STORM: Powerup = Powerup {
-    cost: -2,
+    cost: 10,
     description: "Rock Storm",
     effect: Effects::RockStorm,
 };
 
 const SEED_FRENZY: Powerup = Powerup {
-    cost: -2,
-    description: "Seed Frenzy",
+    cost: 40,
+    description: "Plant Seeds",
     effect: Effects::SeedStorm,
 };
 const ROCKS_TO_GOLD: Powerup = Powerup {
-    cost: 30,
+    cost: 100,
     description: "Rocks To Gold",
     effect: Effects::RocksToGold,
 };
-const POWERUPS: [Powerup; 4] = [BIG_BALL, ROCK_STORM, ROCKS_TO_GOLD, SEED_FRENZY];
+
+const MULTIBALL_STORM: Powerup = Powerup {
+    cost: 20,
+    description: "Multiballs!",
+    effect: Effects::MultiBallStorm,
+};
+
+const MULTIPLIER_STORM: Powerup = Powerup {
+    cost: 50,
+    description: "Multipliers!",
+    effect: Effects::MultiplierStorm,
+};
+
+const ROCK_WALL: Powerup = Powerup {
+    cost: 20,
+    description: "Rock Walls!",
+    effect: Effects::RockWall,
+};
+
+const POWERUPS: [Powerup; 7] = [
+    BIG_BALL,
+    ROCK_STORM,
+    ROCKS_TO_GOLD,
+    SEED_FRENZY,
+    MULTIBALL_STORM,
+    MULTIPLIER_STORM,
+    ROCK_WALL,
+];
 
 struct MouseFocalPoint;
 
@@ -62,10 +95,11 @@ fn apply_rock_storm(
     radius_rate: f32,
     count: usize,
     center: Vec2,
+    start_radius: f32,
 ) {
     let mut random = Random::new();
     let mut angle = random.f32() * std::f32::consts::TAU;
-    let mut radius = 10.0;
+    let mut radius = start_radius;
 
     let mut time_offset = 0.1;
 
@@ -96,7 +130,6 @@ pub fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources) {
         }
     }
 
-    println!("ROCKS: {:?}", rocks.len());
     let mut time_offset = 0.1;
     for rock in rocks {
         let position = world.get::<&Transform>(rock).unwrap().position;
@@ -117,7 +150,35 @@ pub fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources) {
     }
 }
 
-const PLANT_SEGMENT_LENGTH: f32 = 6.0;
+fn create_rock_wall(world: &mut World) {
+    let mut time_offset = 0.1;
+
+    for i in 0..30 {
+        let position = Vec2::new(-65.0, -70.0 + i as f32 * 5.5);
+
+        world.spawn((DelayedAction::new(
+            move |world, resources| {
+                spawn_peg(world, resources, position.xy(), PegType::Stone);
+            },
+            time_offset,
+        ),));
+        time_offset += 0.05;
+    }
+
+    for i in 0..30 {
+        let position = Vec2::new(65.0, -70.0 + i as f32 * 5.5);
+
+        world.spawn((DelayedAction::new(
+            move |world, resources| {
+                spawn_peg(world, resources, position.xy(), PegType::Stone);
+            },
+            time_offset,
+        ),));
+        time_offset += 0.05;
+    }
+}
+
+const PLANT_SEGMENT_LENGTH: f32 = 8.0;
 impl LevelState {
     pub fn new(other_world: World) -> Self {
         Self {
@@ -129,6 +190,9 @@ impl LevelState {
             in_shop: false,
             screen_shake_amount: 0.0,
             effects_to_apply_to_next_ball: Vec::new(),
+            victory: false,
+            fired_once: false,
+            multiplier: 1.0,
         }
     }
 
@@ -140,17 +204,47 @@ impl LevelState {
             for effect in self
                 .effects_to_apply_to_next_ball
                 .drain_filter(|f| match f {
-                    Effects::RockStorm | Effects::RocksToGold | Effects::SeedStorm => true,
+                    Effects::RockStorm
+                    | Effects::RocksToGold
+                    | Effects::SeedStorm
+                    | Effects::MultiBallStorm
+                    | Effects::MultiplierStorm
+                    | Effects::RockWall => true,
                     _ => false,
                 })
             {
                 match effect {
                     Effects::BigBall => {}
+                    Effects::RockWall => create_rock_wall(world),
                     Effects::RockStorm => {
                         let mut random = Random::new();
                         let center =
                             Vec2::new(random.range_f32(-30.0..30.0), random.range_f32(-40.0..30.));
-                        apply_rock_storm(world, resources, PegType::Stone, 0.05, 1.5, 20, center)
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::Stone,
+                            0.05,
+                            1.5,
+                            20,
+                            center,
+                            10.0,
+                        )
+                    }
+                    Effects::MultiBallStorm => {
+                        let mut random = Random::new();
+                        let center =
+                            Vec2::new(random.range_f32(-30.0..30.0), random.range_f32(-40.0..30.));
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::MultiBall,
+                            Random::new().range_f32(0.02..0.1),
+                            Random::new().range_f32(1.0..4.0),
+                            Random::new().range_u32(3..10) as _,
+                            center,
+                            10.0,
+                        )
                     }
                     Effects::RocksToGold => apply_rocks_to_gold(world, resources),
                     Effects::SeedStorm => {
@@ -163,8 +257,24 @@ impl LevelState {
                             PegType::GrowablePlant,
                             0.2,
                             3.0,
-                            4,
+                            2,
                             center,
+                            10.0,
+                        )
+                    }
+                    Effects::MultiplierStorm => {
+                        let mut random = Random::new();
+                        let center =
+                            Vec2::new(random.range_f32(-30.0..30.0), random.range_f32(-40.0..40.0));
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::Multiplier,
+                            0.2,
+                            3.0,
+                            2,
+                            center,
+                            10.0,
                         )
                     }
                 }
@@ -172,7 +282,8 @@ impl LevelState {
         }
     }
 
-    pub fn prepare_to_shoot(&mut self, world: &mut World) {
+    pub fn prepare_to_shoot(&mut self, world: &mut World) -> usize {
+        let mut new_gold = 0;
         if !self.in_shop {
             self.ready_to_shoot = true;
             self.pitch_multiplier = 1.0;
@@ -180,7 +291,16 @@ impl LevelState {
             // TODO: Make this more satisfying
             let mut time_offset = 5;
             let mut len_remaining = self.collected_pegs.len();
+
             for entity in self.collected_pegs.drain(..) {
+                if let Ok(peg) = world.get::<&Peg>(entity) {
+                    match peg.peg_type {
+                        PegType::Gold => new_gold += 20,
+                        PegType::Plant => new_gold += 1,
+                        _ => {}
+                    }
+                }
+
                 len_remaining -= 1;
                 // Destroy collected pegs.
                 let _ = world.insert_one(entity, Temporary(time_offset));
@@ -287,13 +407,22 @@ impl LevelState {
 
                     world.spawn((DelayedAction::new(
                         move |world, resources| {
-                            plant_segment(world, resources, p, new_random_dir, 20, true, 1);
+                            plant_segment(
+                                world,
+                                resources,
+                                p,
+                                new_random_dir,
+                                Random::new().range_u32(3..20) as _,
+                                true,
+                                3,
+                            );
                         },
                         0.01,
                     ),));
                 }
             }
         }
+        new_gold
     }
 }
 
@@ -318,11 +447,16 @@ struct GameAssets {
     gold_material: PegMaterial,
     stone_material: PegMaterial,
     multiball_material: PegMaterial,
+    multiplier_material: PegMaterial,
 
     //
     brick_material: Handle<Material>,
     //
     ball_material: Handle<Material>,
+    //
+    plus_one: Handle<Material>,
+    plus_twenty: Handle<Material>,
+    x2: Handle<Material>,
 }
 
 struct PegMaterial {
@@ -644,12 +778,35 @@ fn main() {
                 &recolor_shader,
                 Color::PURPLE.with_lightness(0.6),
             );
+            let multiplier_material = load_peg_material(
+                resources,
+                &recolor_shader,
+                Color::ELECTRIC_INDIGO.with_lightness(0.9),
+            );
 
             let brick_material = get_texture_material(
                 "assets/Brick.png",
                 resources,
                 recolor_shader.clone(),
                 Color::BLACK.with_lightness(0.6),
+            );
+            let plus_one = get_texture_material(
+                "assets/+1.png",
+                resources,
+                Shader::UNLIT_TRANSPARENT,
+                Color::WHITE,
+            );
+            let plus_twenty = get_texture_material(
+                "assets/+20.png",
+                resources,
+                Shader::UNLIT_TRANSPARENT,
+                Color::WHITE,
+            );
+            let x2 = get_texture_material(
+                "assets/x2.png",
+                resources,
+                recolor_shader.clone(),
+                Color::WHITE,
             );
             resources.add(GameAssets {
                 stem_material,
@@ -660,6 +817,10 @@ fn main() {
                 brick_material,
                 multiball_material,
                 ball_material,
+                plus_one,
+                plus_twenty,
+                multiplier_material,
+                x2,
             });
 
             // apply_rock_storm(world, resources, P);
@@ -672,7 +833,7 @@ fn main() {
                 );
             }
 
-            for _ in 0..4 {
+            for _ in 0..2 {
                 spawn_peg(
                     world,
                     resources,
@@ -681,8 +842,16 @@ fn main() {
                 );
             }
 
-            /*
-            for _ in 0..20 {
+            for _ in 0..2 {
+                spawn_peg(
+                    world,
+                    resources,
+                    Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..10.)),
+                    PegType::Multiplier,
+                );
+            }
+
+            for _ in 0..5 {
                 spawn_peg(
                     world,
                     resources,
@@ -690,28 +859,46 @@ fn main() {
                     PegType::Stone,
                 );
             }
-            */
 
             for i in 0..3 {
-                spawn_brick_with_powerup(
-                    &mut shop_world,
-                    resources,
-                    Vec2::new(i as f32 * 65.0 - 60.0, -10.0),
-                    Random::new().select_from_slice(&POWERUPS).clone(),
-                );
+                if let Some(p) = select_powerup(&mut shop_world) {
+                    spawn_brick_with_powerup(
+                        &mut shop_world,
+                        resources,
+                        Vec2::new(i as f32 * 65.0 - 60.0, -10.0),
+                        p,
+                    );
+                }
             }
 
             for i in 0..2 {
-                spawn_brick_with_powerup(
-                    &mut shop_world,
-                    resources,
-                    Vec2::new(i as f32 * 70.0 - 40.0, -50.0),
-                    Random::new().select_from_slice(&POWERUPS).clone(),
-                );
+                if let Some(p) = select_powerup(&mut shop_world) {
+                    spawn_brick_with_powerup(
+                        &mut shop_world,
+                        resources,
+                        Vec2::new(i as f32 * 70.0 - 40.0, -50.0),
+                        p,
+                    );
+                }
             }
+
+            apply_rock_storm(
+                world,
+                resources,
+                PegType::Gold,
+                0.4,
+                0.0,
+                4,
+                Vec2::new(0.0, -20.0),
+                60.0,
+            );
+
+            create_rock_wall(world);
 
             let level_state = LevelState::new(shop_world);
             resources.add(level_state);
+
+            let mut subtract_gold_timer = 1.5;
 
             // This function will run for major events liked a FixedUpdate occuring
             // and for any input events from the application.
@@ -738,8 +925,36 @@ fn main() {
 
                     rapier_integration.step(world);
                     world.spawn((rapier_integration,));
+
+                    let victory = resources.get::<LevelState>().victory;
+                    if !victory && resources.get::<UIState>().gold >= 1000 {
+                        resources.get::<UIState>().current_text =
+                            "You've reached 1000 and won!".into();
+                        resources.get::<LevelState>().victory = true;
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::MultiBall,
+                            0.04,
+                            0.0,
+                            60,
+                            Vec2::ZERO,
+                            15.0,
+                        );
+
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::Plant,
+                            0.04,
+                            0.0,
+                            40,
+                            Vec2::ZERO,
+                            60.0,
+                        );
+                    }
                 }
-                Event::KappEvent(KappEvent::KeyDown { key: Key::A, .. }) => {
+                Event::KappEvent(KappEvent::KeyDown { key: Key::S, .. }) => {
                     let mut level_state = resources.remove::<LevelState>().unwrap();
                     level_state.toggle_shop(world, resources);
                     resources.add(level_state);
@@ -747,6 +962,20 @@ fn main() {
                 Event::Draw => {
                     {
                         let mut level_state = resources.get::<LevelState>();
+
+                        let mut ui_state = resources.get::<UIState>();
+                        if ui_state.incoming_gold > 0 {
+                            if subtract_gold_timer < 0.0 {
+                                ui_state.incoming_gold -= 1;
+                                ui_state.gold += 1;
+                                subtract_gold_timer = 0.2;
+                                level_state.screen_shake_amount += 0.05;
+                            } else {
+                                subtract_gold_timer -= 30.0 / 60.0;
+                            }
+                        } else {
+                            subtract_gold_timer = 1.5;
+                        }
 
                         let screen_shake_amount = &mut level_state.screen_shake_amount;
                         let screen_shake = Vec2::new(
@@ -830,12 +1059,27 @@ fn main() {
                     }
                 }
 
-                Event::KappEvent(KappEvent::PointerDown {
+                Event::KappEvent(KappEvent::PointerUp {
                     x,
                     y,
                     button: PointerButton::Primary,
                     ..
                 }) => {
+                    // Shoot one ball at a time
+                    {
+                        let mut level_state = resources.get::<LevelState>();
+                        if !level_state.ready_to_shoot && !level_state.in_shop {
+                            return;
+                        }
+                        level_state.ready_to_shoot = false;
+                    }
+
+                    {
+                        if resources.get::<UIState>().incoming_gold > 0 {
+                            return;
+                        }
+                    }
+                    resources.get::<LevelState>().fired_once = true;
                     resources.get::<UIState>().gold -= 1;
 
                     pointer_position = {
@@ -973,7 +1217,7 @@ fn run_health(world: &mut World, _resources: &mut Resources) {
 fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
     let mut count = 0;
     let mut to_despawn = Vec::new();
-    for (e, (transform, ball)) in world.query::<(&GlobalTransform, &mut Ball)>().iter() {
+    for (e, (transform, ball)) in world.query::<(&Transform, &mut Ball)>().iter() {
         if transform.position.y < world_bottom {
             to_despawn.push(e);
         } else {
@@ -987,7 +1231,37 @@ fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
 
     if count == 0 {
         let mut level_state = resources.get::<LevelState>();
-        level_state.prepare_to_shoot(world);
+        let new_gold = level_state.prepare_to_shoot(world);
+
+        if level_state.fired_once {
+            level_state.fired_once = false;
+            if new_gold == 0 {
+                resources.get::<UIState>().current_text = ":(".into();
+            }
+
+            if new_gold > 10 {
+                resources.get::<UIState>().current_text = "Nice shot!".into();
+            }
+
+            if new_gold > 50 {
+                resources.get::<UIState>().current_text = "Great shot!".into();
+            }
+
+            if new_gold > 100 {
+                resources.get::<UIState>().current_text = "Amazing!".into();
+            }
+            if new_gold > 200 {
+                resources.get::<UIState>().current_text = ":O :O :O!!!!".into();
+            }
+        }
+        if resources.get::<UIState>().gold >= 1000 {
+            resources.get::<UIState>().current_text = "YOU WIN!!!".into();
+        }
+
+        resources.get::<UIState>().incoming_gold +=
+            (new_gold as f32 * level_state.multiplier) as i32;
+        level_state.multiplier = 1.0;
+        level_state.ready_to_shoot = true;
     }
 }
 
@@ -1043,21 +1317,90 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
                                 peg.hit = true;
                                 *world.get::<&mut Handle<Material>>(entity).unwrap() =
                                     peg.glowing_material.clone();
-                                audio_manager.play_one_shot_with_speed(
-                                    peg_hit_sound,
-                                    level_state.pitch_multiplier,
-                                );
+
                                 level_state.pitch_multiplier += 0.1;
                                 level_state.pitch_multiplier =
-                                    level_state.pitch_multiplier.min(50.0);
+                                    level_state.pitch_multiplier.min(10.0);
 
                                 world.get::<&mut Scale>(peg.shockwave_child).unwrap().t = 0.5;
                                 level_state.collected_pegs.push(entity);
 
                                 match peg.peg_type {
+                                    PegType::Plant | PegType::Gold => audio_manager
+                                        .play_one_shot_with_speed(
+                                            peg_hit_sound,
+                                            level_state.pitch_multiplier,
+                                        ),
+                                    PegType::Multiplier => {
+                                        let position =
+                                            world.get::<&GlobalTransform>(entity).unwrap().position;
+                                        deferred_actions.push(DelayedAction::new(
+                                            move |world, resources| {
+                                                world.spawn((
+                                                    Transform::new()
+                                                        .with_position(
+                                                            position - Vec2::fill(2.0).extend(0.0),
+                                                        )
+                                                        .with_scale(Vec3::fill(20.0)),
+                                                    resources.get::<GameAssets>().x2.clone(),
+                                                    Mesh::VERTICAL_QUAD,
+                                                    Temporary(90),
+                                                ));
+                                            },
+                                            0.01,
+                                        ));
+                                        level_state.multiplier *= 2.0;
+                                        audio_manager.play_one_shot_with_speed(peg_hit_sound, 8.0);
+                                    }
+                                    _ => {
+                                        audio_manager.play_one_shot_with_speed(peg_hit_sound, 0.7);
+                                    }
+                                }
+                                match peg.peg_type {
                                     PegType::Gold => {
+                                        let position =
+                                            world.get::<&GlobalTransform>(entity).unwrap().position;
+                                        deferred_actions.push(DelayedAction::new(
+                                            move |world, resources| {
+                                                world.spawn((
+                                                    Transform::new()
+                                                        .with_position(
+                                                            position + Vec2::fill(2.0).extend(0.0),
+                                                        )
+                                                        .with_scale(Vec3::fill(15.0)),
+                                                    resources
+                                                        .get::<GameAssets>()
+                                                        .plus_twenty
+                                                        .clone(),
+                                                    Mesh::VERTICAL_QUAD,
+                                                    Temporary(50),
+                                                ));
+                                            },
+                                            0.01,
+                                        ));
+
                                         level_state.screen_shake_amount += 0.3;
-                                        resources.get::<UIState>().gold += 1;
+                                    }
+                                    PegType::Plant => {
+                                        let position =
+                                            world.get::<&GlobalTransform>(entity).unwrap().position;
+                                        deferred_actions.push(DelayedAction::new(
+                                            move |world, resources| {
+                                                world.spawn((
+                                                    Transform::new()
+                                                        .with_position(
+                                                            position + Vec2::fill(2.0).extend(0.0),
+                                                        )
+                                                        .with_scale(Vec3::fill(12.0)),
+                                                    resources.get::<GameAssets>().plus_one.clone(),
+                                                    Mesh::VERTICAL_QUAD,
+                                                    Temporary(30),
+                                                ));
+                                            },
+                                            0.01,
+                                        ));
+
+                                        level_state.screen_shake_amount += 0.05;
                                     }
                                     PegType::MultiBall => {
                                         level_state.screen_shake_amount += 0.1;
@@ -1124,12 +1467,9 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
                 world.spawn((DelayedAction::new(
                     Box::new(move |world: &mut World, resources: &mut Resources| {
                         // Replacement powerup
-                        spawn_brick_with_powerup(
-                            world,
-                            resources,
-                            t.xy(),
-                            Random::new().select_from_slice(&POWERUPS).clone(),
-                        );
+                        if let Some(p) = select_powerup(world) {
+                            spawn_brick_with_powerup(world, resources, t.xy(), p);
+                        }
                     }),
                     0.6,
                 ),));
@@ -1139,6 +1479,29 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
     }
 }
 
+fn select_powerup(world: &mut World) -> Option<Powerup> {
+    let in_world: Vec<_> = world
+        .query::<&Powerup>()
+        .iter()
+        .map(|i| i.1.effect.clone())
+        .collect();
+
+    println!("IN WORLD: {:?}", in_world);
+    let mut random = Random::new();
+
+    let mut replacement_type = random.select_from_slice(&POWERUPS).clone();
+
+    let mut max_iterations = 10;
+    while in_world.contains(&replacement_type.effect) {
+        replacement_type = random.select_from_slice(&POWERUPS).clone();
+        if max_iterations == 0 {
+            return None;
+        }
+        max_iterations -= 1;
+    }
+    Some(replacement_type)
+}
+
 #[derive(Clone, PartialEq)]
 enum PegType {
     GrowablePlant,
@@ -1146,6 +1509,7 @@ enum PegType {
     Gold,
     Stone,
     MultiBall,
+    Multiplier,
 }
 fn spawn_peg(
     world: &mut World,
@@ -1180,6 +1544,7 @@ fn spawn_peg(
         PegType::Gold => &game_assets.gold_material,
         PegType::Stone => &game_assets.stone_material,
         PegType::MultiBall => &game_assets.multiball_material,
+        PegType::Multiplier => &game_assets.multiplier_material,
     };
 
     let child = world.spawn((
