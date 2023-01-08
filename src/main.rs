@@ -893,8 +893,6 @@ fn main() {
                 60.0,
             );
 
-            create_rock_wall(world);
-
             let level_state = LevelState::new(shop_world);
             resources.add(level_state);
 
