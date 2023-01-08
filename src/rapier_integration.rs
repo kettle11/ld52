@@ -74,14 +74,12 @@ impl RapierIntegration {
         {
             if transform.scale != rigid_body.scale {
                 rigid_body.scale = transform.scale;
-                // println!("SCALE CHANGED!");
             }
             let collider = self
                 .collider_set
                 .get_mut(rigid_body.collider_handle)
                 .unwrap();
             collider.user_data = e.to_bits().get() as _;
-
             let body = &mut self.rigid_body_set[rigid_body.rigid_body_handle];
             let p_array: [f32; 2] = body.position().translation.into();
             if p_array != transform.position.xy().as_array() {

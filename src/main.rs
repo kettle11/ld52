@@ -1,3 +1,5 @@
+#![feature(drain_filter)]
+
 use koi3::*;
 mod rapier_integration;
 use rapier2d::prelude::*;
@@ -14,9 +16,108 @@ struct LevelState {
     ready_to_shoot: bool,
     collected_pegs: Vec<Entity>,
     other_world: World,
+    in_shop: bool,
+    screen_shake_amount: f32,
+    effects_to_apply_to_next_ball: Vec<Effects>,
 }
 
+#[derive(Clone)]
+enum Effects {
+    BigBall,
+    RockStorm,
+    RocksToGold,
+    SeedStorm,
+}
+
+const BIG_BALL: Powerup = Powerup {
+    cost: 1,
+    description: "2x Size",
+    effect: Effects::BigBall,
+};
+const ROCK_STORM: Powerup = Powerup {
+    cost: -2,
+    description: "Rock Storm",
+    effect: Effects::RockStorm,
+};
+
+const SEED_FRENZY: Powerup = Powerup {
+    cost: -2,
+    description: "Seed Frenzy",
+    effect: Effects::SeedStorm,
+};
+const ROCKS_TO_GOLD: Powerup = Powerup {
+    cost: 30,
+    description: "Rocks To Gold",
+    effect: Effects::RocksToGold,
+};
+const POWERUPS: [Powerup; 4] = [BIG_BALL, ROCK_STORM, ROCKS_TO_GOLD, SEED_FRENZY];
+
 struct MouseFocalPoint;
+
+fn apply_rock_storm(
+    world: &mut World,
+    resources: &mut Resources,
+    peg_type: PegType,
+    turn_rate: f32,
+    radius_rate: f32,
+    count: usize,
+    center: Vec2,
+) {
+    let mut random = Random::new();
+    let mut angle = random.f32() * std::f32::consts::TAU;
+    let mut radius = 10.0;
+
+    let mut time_offset = 0.1;
+
+    for _ in 0..count {
+        angle += std::f32::consts::TAU * turn_rate / (radius / 30.0);
+        radius += radius_rate;
+
+        let (sin, cos) = angle.sin_cos();
+        let position = Vec2::new(cos, sin) * radius + center;
+
+        let peg_type = peg_type.clone();
+        world.spawn((DelayedAction::new(
+            move |world, resources| {
+                spawn_peg(world, resources, position.xy(), peg_type.clone());
+            },
+            time_offset,
+        ),));
+        time_offset += 0.05;
+    }
+}
+
+pub fn apply_rocks_to_gold(world: &mut World, resources: &mut Resources) {
+    let mut rocks = Vec::new();
+    for (e, p) in world.query::<&Peg>().iter() {
+        match p.peg_type {
+            PegType::Stone => rocks.push(e),
+            _ => {}
+        }
+    }
+
+    println!("ROCKS: {:?}", rocks.len());
+    let mut time_offset = 0.1;
+    for rock in rocks {
+        let position = world.get::<&Transform>(rock).unwrap().position;
+        world.spawn((DelayedAction::new(
+            move |world, resources| {
+                let _ = world.despawn(rock);
+            },
+            time_offset,
+        ),));
+        world.spawn((DelayedAction::new(
+            move |world, resources| {
+                spawn_peg(world, resources, position.xy(), PegType::Gold);
+            },
+            time_offset + 0.02,
+        ),));
+
+        time_offset += 0.02;
+    }
+}
+
+const PLANT_SEGMENT_LENGTH: f32 = 6.0;
 impl LevelState {
     pub fn new(other_world: World) -> Self {
         Self {
@@ -25,100 +126,172 @@ impl LevelState {
             ready_to_shoot: true,
             collected_pegs: Vec::new(),
             other_world,
+            in_shop: false,
+            screen_shake_amount: 0.0,
+            effects_to_apply_to_next_ball: Vec::new(),
         }
     }
-    pub fn prepare_to_shoot(&mut self, world: &mut World) {
-        self.ready_to_shoot = true;
-        self.pitch_multiplier = 1.0;
 
-        // TODO: Make this more satisfying
-        let mut time_offset = 5;
-        for entity in self.collected_pegs.drain(..) {
-            let _ = world.insert_one(entity, Temporary(time_offset));
-            time_offset += 5;
+    pub fn toggle_shop(&mut self, world: &mut World, resources: &mut Resources) {
+        self.in_shop = !self.in_shop;
+        std::mem::swap(world, &mut self.other_world);
 
-            // Grow a child plant
-            let should_spawn_plant = world.get::<&Plant>(entity).map(|p| {
-                let peg_transform = world.get::<&Transform>(entity).unwrap();
-                *peg_transform
-            });
-
-            if let Ok(transform) = should_spawn_plant {
-                let p = transform.position.xy();
-
-                fn plant_segment(
-                    world: &mut World,
-                    resources: &mut Resources,
-                    position: Vec2,
-                    stem_direction: Vec2,
-                    mut energy: usize,
-                    skip_stem: bool,
-                    mut gold_energy: usize,
-                ) {
-                    if !skip_stem {
-                        if energy == 1 && gold_energy == 1 {
-                            spawn_gold(world, resources, position, stem_direction * 8.0);
-                        } else {
-                            if gold_energy > 0 && Random::new().f32() > 0.8 {
-                                spawn_gold(world, resources, position, stem_direction * 8.0);
-                                gold_energy -= 1;
-                            } else {
-                                spawn_plant(world, resources, position, stem_direction * 8.0);
-                            }
-                        }
+        if !self.in_shop {
+            for effect in self
+                .effects_to_apply_to_next_ball
+                .drain_filter(|f| match f {
+                    Effects::RockStorm | Effects::RocksToGold | Effects::SeedStorm => true,
+                    _ => false,
+                })
+            {
+                match effect {
+                    Effects::BigBall => {}
+                    Effects::RockStorm => {
+                        let mut random = Random::new();
+                        let center =
+                            Vec2::new(random.range_f32(-30.0..30.0), random.range_f32(-40.0..30.));
+                        apply_rock_storm(world, resources, PegType::Stone, 0.05, 1.5, 20, center)
                     }
-                    energy = energy.saturating_sub(1);
-                    if energy > 0 {
-                        world.spawn((DelayedAction::new(
-                            move |world, resources| {
-                                let mut segment_count = 1;
-                                let mut energy_in_segments = [energy, 0];
+                    Effects::RocksToGold => apply_rocks_to_gold(world, resources),
+                    Effects::SeedStorm => {
+                        let mut random = Random::new();
+                        let center =
+                            Vec2::new(random.range_f32(-30.0..30.0), random.range_f32(-40.0..0.));
+                        apply_rock_storm(
+                            world,
+                            resources,
+                            PegType::GrowablePlant,
+                            0.2,
+                            3.0,
+                            4,
+                            center,
+                        )
+                    }
+                }
+            }
+        }
+    }
 
-                                if Random::new().f32() > 0.8 {
-                                    segment_count += 1;
-                                    let transfer = Random::new().range_u32(1..energy as _);
-                                    energy_in_segments[0] -= transfer as usize;
-                                    energy_in_segments[1] += transfer as usize;
-                                }
+    pub fn prepare_to_shoot(&mut self, world: &mut World) {
+        if !self.in_shop {
+            self.ready_to_shoot = true;
+            self.pitch_multiplier = 1.0;
 
-                                for i in 0..segment_count {
-                                    let range = std::f32::consts::PI * 0.4;
-                                    let rotation = range * -1.0 + Random::new().f32() * range * 2.0;
+            // TODO: Make this more satisfying
+            let mut time_offset = 5;
+            let mut len_remaining = self.collected_pegs.len();
+            for entity in self.collected_pegs.drain(..) {
+                len_remaining -= 1;
+                // Destroy collected pegs.
+                let _ = world.insert_one(entity, Temporary(time_offset));
 
-                                    let rotation = Quat::from_angle_axis(rotation, Vec3::Z);
-                                    let new_random_dir =
-                                        rotation.rotate_vector3(stem_direction.extend(0.0)).xy();
+                if len_remaining > 10 {
+                    time_offset += 2;
+                } else {
+                    time_offset += 4;
+                }
 
-                                    let position = position + new_random_dir * 8.0;
+                // Grow a child plant
+                let should_spawn_plant = world.get::<&Plant>(entity).map(|p| {
+                    let peg_transform = world.get::<&Transform>(entity).unwrap();
+                    *peg_transform
+                });
 
-                                    plant_segment(
+                if let Ok(transform) = should_spawn_plant {
+                    let p = transform.position.xy();
+
+                    fn plant_segment(
+                        world: &mut World,
+                        resources: &mut Resources,
+                        position: Vec2,
+                        stem_direction: Vec2,
+                        mut energy: usize,
+                        skip_stem: bool,
+                        mut gold_energy: usize,
+                    ) {
+                        if !skip_stem {
+                            if energy == 1 && gold_energy == 1 {
+                                spawn_gold(
+                                    world,
+                                    resources,
+                                    position,
+                                    stem_direction * PLANT_SEGMENT_LENGTH,
+                                );
+                            } else {
+                                if gold_energy > 0 && Random::new().f32() > 0.8 {
+                                    spawn_gold(
                                         world,
                                         resources,
                                         position,
-                                        new_random_dir,
-                                        energy_in_segments[i],
-                                        false,
-                                        gold_energy,
+                                        stem_direction * PLANT_SEGMENT_LENGTH,
+                                    );
+                                    gold_energy -= 1;
+                                } else {
+                                    spawn_plant(
+                                        world,
+                                        resources,
+                                        position,
+                                        stem_direction * PLANT_SEGMENT_LENGTH,
                                     );
                                 }
-                            },
-                            0.01,
-                        ),));
+                            }
+                        }
+                        energy = energy.saturating_sub(1);
+                        if energy > 0 {
+                            world.spawn((DelayedAction::new(
+                                move |world, resources| {
+                                    let mut segment_count = 1;
+                                    let mut energy_in_segments = [energy, 0];
+
+                                    if Random::new().f32() > 0.8 {
+                                        segment_count += 1;
+                                        let transfer = Random::new().range_u32(1..energy as _);
+                                        energy_in_segments[0] -= transfer as usize;
+                                        energy_in_segments[1] += transfer as usize;
+                                    }
+
+                                    for i in 0..segment_count {
+                                        let range = std::f32::consts::PI * 0.4;
+                                        let rotation =
+                                            range * -1.0 + Random::new().f32() * range * 2.0;
+
+                                        let rotation = Quat::from_angle_axis(rotation, Vec3::Z);
+                                        let new_random_dir = rotation
+                                            .rotate_vector3(stem_direction.extend(0.0))
+                                            .xy();
+
+                                        let position =
+                                            position + new_random_dir * PLANT_SEGMENT_LENGTH;
+
+                                        plant_segment(
+                                            world,
+                                            resources,
+                                            position,
+                                            new_random_dir,
+                                            energy_in_segments[i],
+                                            false,
+                                            gold_energy,
+                                        );
+                                    }
+                                },
+                                0.2,
+                            ),));
+                        }
                     }
+
+                    let range = std::f32::consts::PI * 0.5;
+                    let rotation = range * -1.0 + Random::new().f32() * range * 2.0;
+
+                    let rotation = Quat::from_angle_axis(rotation, Vec3::Z);
+                    let new_random_dir = rotation.rotate_vector3(Vec2::Y.extend(0.0)).xy();
+
+                    world.spawn((DelayedAction::new(
+                        move |world, resources| {
+                            plant_segment(world, resources, p, new_random_dir, 20, true, 1);
+                        },
+                        0.01,
+                    ),));
                 }
-
-                let range = std::f32::consts::PI * 0.5;
-                let rotation = range * -1.0 + Random::new().f32() * range * 2.0;
-
-                let rotation = Quat::from_angle_axis(rotation, Vec3::Z);
-                let new_random_dir = rotation.rotate_vector3(Vec2::Y.extend(0.0)).xy();
-
-                world.spawn((DelayedAction::new(
-                    move |world, resources| {
-                        plant_segment(world, resources, p, new_random_dir, 7, true, 1);
-                    },
-                    0.01,
-                ),));
             }
         }
     }
@@ -144,6 +317,12 @@ struct GameAssets {
     plant_material: PegMaterial,
     gold_material: PegMaterial,
     stone_material: PegMaterial,
+    multiball_material: PegMaterial,
+
+    //
+    brick_material: Handle<Material>,
+    //
+    ball_material: Handle<Material>,
 }
 
 struct PegMaterial {
@@ -159,8 +338,6 @@ struct EyeFocalPoint;
 struct Plant {
     last_direction: usize,
 }
-
-struct PlantGrowth;
 
 fn run_eyes(world: &mut World, resources: &Resources) {
     // TODO: The eyes wiggle because this isn't calculated from their center.
@@ -216,6 +393,8 @@ fn run_scale(world: &mut World, resources: &Resources) {
     }
 }
 
+struct MainCamera;
+
 fn main() {
     App::default()
         .with_resource(InitialSettings {
@@ -227,8 +406,9 @@ fn main() {
             let rapier_integration = rapier_integration::RapierIntegration::new();
 
             let view_height = 150.0;
-            let camera_entity = world.spawn((
-                Transform::new().with_position(Vec3::Z * 2.0),
+
+            let child_camera = world.spawn((
+                Transform::new(),
                 Camera {
                     clear_color: Some(Color::BLACK),
                     exposure: Exposure::EV100(6.0),
@@ -239,7 +419,10 @@ fn main() {
                     },
                     ..Default::default()
                 },
+                MainCamera,
             ));
+            let parent = world.spawn((Transform::new().with_position(Vec3::Z * 2.0),));
+            let _ = world.set_parent(parent, child_camera);
 
             let top_of_screen = Vec3::new(0.0, view_height / 2.0 * 0.75, 0.0);
 
@@ -320,7 +503,7 @@ fn main() {
 
             let mut ui = ui::UI::new(world, resources);
 
-            let mut spawn_witch = |world: &mut World| {
+            let spawn_witch = |world: &mut World| {
                 let witch_material = get_texture_material(
                     "assets/Witch.png",
                     resources,
@@ -337,7 +520,7 @@ fn main() {
                 let witch = world.spawn((
                     Transform::new()
                         .with_position(top_of_screen + Vec3::Z * 0.2)
-                        .with_scale(Vec3::fill(25.0)),
+                        .with_scale(Vec3::fill(35.0)),
                     witch_material,
                     Mesh::VERTICAL_QUAD,
                 ));
@@ -386,22 +569,26 @@ fn main() {
             spawn_witch(world);
 
             let mut shop_world = World::new();
-            let camera_entity = shop_world.spawn((
-                Transform::new().with_position(Vec3::Z * 2.0),
+            let camera_child = shop_world.spawn((
+                Transform::new(),
                 Camera {
                     clear_color: Some(Color::BLACK),
                     exposure: Exposure::EV100(6.0),
                     projection_mode: ProjectionMode::Orthographic {
-                        height: 150.0,
+                        height: view_height,
                         z_near: -2.0,
                         z_far: 2.0,
                     },
                     ..Default::default()
                 },
+                MainCamera,
             ));
+            let camera_parent = shop_world.spawn((Transform::new().with_position(Vec3::Z * 2.0),));
+            let _ = shop_world.set_parent(camera_parent, camera_child);
 
             shop_world.spawn((Transform::new(), EyeFocalPoint, MouseFocalPoint));
             shop_world.spawn((RapierIntegration::new(),));
+
             spawn_witch(&mut shop_world);
             ui.add_to_world(&mut shop_world);
 
@@ -425,24 +612,16 @@ fn main() {
                 ));
             }
 
-            let peg_color = Color::GREEN.with_lightness(0.8).with_chroma(0.4);
-
             let ball_material = get_texture_material(
                 "assets/Ball.png",
                 resources,
                 recolor_shader.clone(),
-                Color::RED,
+                Color::from_srgb_hex(0xd4af37, 1.0),
             );
 
             let peg_hit_sound = resources
                 .get::<AssetStore<Sound>>()
                 .load("assets/marimba.wav", Default::default());
-
-            let ball_bundle = (
-                Transform::new().with_scale(Vec3::fill(3.5)),
-                Mesh::VERTICAL_QUAD,
-                ball_material,
-            );
 
             world.spawn((Transform::new(), EyeFocalPoint, MouseFocalPoint));
 
@@ -452,9 +631,6 @@ fn main() {
 
             world.spawn((rapier_integration,));
 
-            let mut level_state = LevelState::new(shop_world);
-            resources.add(level_state);
-
             let mut pointer_position = Vec3::ZERO;
 
             let growable_plant_material =
@@ -463,22 +639,49 @@ fn main() {
             let gold_material = load_peg_material(resources, &recolor_shader, Color::YELLOW);
             let stone_material =
                 load_peg_material(resources, &recolor_shader, Color::BLACK.with_lightness(0.6));
+            let multiball_material = load_peg_material(
+                resources,
+                &recolor_shader,
+                Color::PURPLE.with_lightness(0.6),
+            );
 
+            let brick_material = get_texture_material(
+                "assets/Brick.png",
+                resources,
+                recolor_shader.clone(),
+                Color::BLACK.with_lightness(0.6),
+            );
             resources.add(GameAssets {
                 stem_material,
                 growable_plant_material,
                 plant_material,
                 gold_material,
                 stone_material: stone_material,
+                brick_material,
+                multiball_material,
+                ball_material,
             });
 
-            for _ in 0..3 {
-                spawn_growable_plant_peg(
+            // apply_rock_storm(world, resources, P);
+            for _ in 0..2 {
+                spawn_peg(
                     world,
                     resources,
                     Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..-20.)),
+                    PegType::GrowablePlant,
                 );
             }
+
+            for _ in 0..4 {
+                spawn_peg(
+                    world,
+                    resources,
+                    Vec2::new(random.range_f32(-50.0..50.0), random.range_f32(-50.0..10.)),
+                    PegType::MultiBall,
+                );
+            }
+
+            /*
             for _ in 0..20 {
                 spawn_peg(
                     world,
@@ -487,6 +690,28 @@ fn main() {
                     PegType::Stone,
                 );
             }
+            */
+
+            for i in 0..3 {
+                spawn_brick_with_powerup(
+                    &mut shop_world,
+                    resources,
+                    Vec2::new(i as f32 * 65.0 - 60.0, -10.0),
+                    Random::new().select_from_slice(&POWERUPS).clone(),
+                );
+            }
+
+            for i in 0..2 {
+                spawn_brick_with_powerup(
+                    &mut shop_world,
+                    resources,
+                    Vec2::new(i as f32 * 70.0 - 40.0, -50.0),
+                    Random::new().select_from_slice(&POWERUPS).clone(),
+                );
+            }
+
+            let level_state = LevelState::new(shop_world);
+            resources.add(level_state);
 
             // This function will run for major events liked a FixedUpdate occuring
             // and for any input events from the application.
@@ -515,12 +740,38 @@ fn main() {
                     world.spawn((rapier_integration,));
                 }
                 Event::KappEvent(KappEvent::KeyDown { key: Key::A, .. }) => {
-                    let mut level_state = resources.get::<LevelState>();
-                    std::mem::swap(world, &mut level_state.other_world);
+                    let mut level_state = resources.remove::<LevelState>().unwrap();
+                    level_state.toggle_shop(world, resources);
+                    resources.add(level_state);
                 }
-
                 Event::Draw => {
+                    {
+                        let mut level_state = resources.get::<LevelState>();
+
+                        let screen_shake_amount = &mut level_state.screen_shake_amount;
+                        let screen_shake = Vec2::new(
+                            random.range_f32(-*screen_shake_amount..*screen_shake_amount),
+                            random.range_f32(-*screen_shake_amount..*screen_shake_amount),
+                        );
+
+                        let mut q = world.query::<(&mut Transform, &MainCamera)>();
+                        let mut iter = q.iter();
+                        let (camera_transform, ..) = iter.next().unwrap().1;
+                        camera_transform.position =
+                            screen_shake.extend(camera_transform.position.z);
+                        *screen_shake_amount *= 0.94;
+                    }
+
+                    if !world
+                        .query::<(&mut GlobalTransform, &Camera)>()
+                        .iter()
+                        .next()
+                        .is_some()
+                    {
+                        return;
+                    }
                     ui.run(world, resources);
+                    draw_screen_space_uis(world, resources);
 
                     run_eyes(world, resources);
                     run_scale(world, resources);
@@ -530,9 +781,9 @@ fn main() {
                     let (x, y) = input.pointer_position();
 
                     pointer_position = {
-                        let (camera_transform, camera) = world
-                            .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
-                            .unwrap();
+                        let mut q = world.query::<(&mut GlobalTransform, &Camera, &MainCamera)>();
+                        let mut i = q.iter();
+                        let (_, (camera_transform, camera, _)) = i.next().unwrap();
 
                         let view_size = resources.get::<kapp::Window>().size();
                         let ray = camera.view_to_ray(
@@ -587,20 +838,10 @@ fn main() {
                 }) => {
                     resources.get::<UIState>().gold -= 1;
 
-                    let rapier_integration = world
-                        .query::<&mut RapierIntegration>()
-                        .iter()
-                        .next()
-                        .unwrap()
-                        .0;
-                    let mut rapier_integration = world
-                        .remove_one::<RapierIntegration>(rapier_integration)
-                        .unwrap();
-
                     pointer_position = {
-                        let (camera_transform, camera) = world
-                            .query_one_mut::<(&mut GlobalTransform, &Camera)>(camera_entity)
-                            .unwrap();
+                        let mut q = world.query::<(&mut GlobalTransform, &Camera, &MainCamera)>();
+                        let mut i = q.iter();
+                        let (_, (camera_transform, camera, _)) = i.next().unwrap();
 
                         let view_size = resources.get::<kapp::Window>().size();
                         let ray = camera.view_to_ray(
@@ -615,33 +856,95 @@ fn main() {
 
                     let dir = (pointer_position - top_of_screen).normalized() * SHOT_POWER;
 
-                    let rapier_handle = rapier_integration.add_rigid_body_with_collider(
-                        RigidBodyBuilder::dynamic()
-                            .linvel([dir.x, dir.y].into())
-                            .build(),
-                        ColliderBuilder::ball(0.5 * 3.5).restitution(0.7).build(),
-                    );
-                    let mut p = top_of_screen;
-                    p.z = 0.3;
-                    let b = (
-                        ball_bundle.0.with_position(p),
-                        ball_bundle.1.clone(),
-                        ball_bundle.2.clone(),
-                        Ball,
-                        EyeFocalPoint,
-                        rapier_handle,
-                    );
+                    let mut ball_size = 3.5;
+                    let mut health_subtract_rate = 1.0;
 
-                    world.spawn(b);
-                    world.spawn((rapier_integration,));
+                    {
+                        let mut level_state = resources.get::<LevelState>();
+
+                        if !level_state.in_shop {
+                            for effect in level_state.effects_to_apply_to_next_ball.drain(..) {
+                                match effect {
+                                    Effects::BigBall => {
+                                        ball_size *= 2.0;
+                                        health_subtract_rate *= 2.0;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+
+                    let p = top_of_screen;
+
+                    spawn_ball(
+                        world,
+                        resources,
+                        p.xy(),
+                        dir.xy(),
+                        health_subtract_rate,
+                        ball_size,
+                    );
                 }
                 _ => {}
             }
         });
 }
 
+fn spawn_ball(
+    world: &mut World,
+    resources: &mut Resources,
+    position: Vec2,
+    dir: Vec2,
+    health_subtract_rate: f32,
+    mut ball_size: f32,
+) {
+    let rapier_integration = world
+        .query::<&mut RapierIntegration>()
+        .iter()
+        .next()
+        .unwrap()
+        .0;
+    let mut rapier_integration = world
+        .remove_one::<RapierIntegration>(rapier_integration)
+        .unwrap();
+
+    let mut assets = resources.get::<GameAssets>();
+    let mut health_subtract_rate = 1.0;
+
+    ball_size = ball_size.min(50.0);
+
+    let rapier_handle = rapier_integration.add_rigid_body_with_collider(
+        RigidBodyBuilder::dynamic()
+            .linvel([dir.x, dir.y].into())
+            .build(),
+        ColliderBuilder::ball(ball_size / 2.0)
+            .restitution(0.7)
+            .build(),
+    );
+    let position = position.extend(0.3);
+
+    let b = (
+        Transform::new()
+            .with_position(position)
+            .with_scale(Vec3::fill(ball_size)),
+        Mesh::VERTICAL_QUAD,
+        assets.ball_material.clone(),
+        Ball {
+            health_subtract_rate,
+        },
+        EyeFocalPoint,
+        rapier_handle,
+    );
+
+    world.spawn(b);
+    world.spawn((rapier_integration,));
+}
+
 #[derive(Clone)]
-struct Ball;
+struct Ball {
+    health_subtract_rate: f32,
+}
 
 #[derive(Clone)]
 struct Peg {
@@ -654,7 +957,7 @@ struct Peg {
 #[derive(Clone)]
 struct Health(f32);
 
-fn run_health(world: &mut World, resources: &mut Resources) {
+fn run_health(world: &mut World, _resources: &mut Resources) {
     let mut to_despawn = Vec::new();
     for (e, health) in world.query::<&Health>().iter() {
         if health.0 <= 0.0 {
@@ -689,83 +992,160 @@ fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
 }
 
 fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle<Sound>) {
+    let mut to_despawn = Vec::new();
+    let mut deferred_actions = Vec::new();
     {
-        let rapier_integration = world
-            .query::<&mut RapierIntegration>()
-            .iter()
-            .next()
-            .unwrap()
-            .0;
-        let rapier_integration = world
-            .remove_one::<RapierIntegration>(rapier_integration)
-            .unwrap();
+        {
+            let rapier_integration = world
+                .query::<&mut RapierIntegration>()
+                .iter()
+                .next()
+                .unwrap()
+                .0;
+            let rapier_integration = world
+                .remove_one::<RapierIntegration>(rapier_integration)
+                .unwrap();
 
-        let sounds = resources.get::<AssetStore<Sound>>();
-        let mut audio_manager = resources.get::<AudioManager>();
+            let sounds = resources.get::<AssetStore<Sound>>();
+            let mut audio_manager = resources.get::<AudioManager>();
 
-        let peg_hit_sound = sounds.get(peg_hit_sound);
+            let peg_hit_sound = sounds.get(peg_hit_sound);
 
-        let mut level_state = resources.get::<LevelState>();
+            let mut level_state = resources.get::<LevelState>();
 
-        for (e, (transform, ball)) in world.query::<(&Transform, &mut Ball)>().iter() {
-            let collider = world.get::<&RapierRigidBody>(e).unwrap();
-            for contact_pair in rapier_integration
-                .narrow_phase
-                .contacts_with(collider.collider_handle)
-            {
-                let other_collider = if contact_pair.collider1 == collider.collider_handle {
-                    contact_pair.collider2
-                } else {
-                    contact_pair.collider1
-                };
+            for (e, (transform, ball)) in world.query::<(&Transform, &mut Ball)>().iter() {
+                let collider = world.get::<&RapierRigidBody>(e).unwrap();
+                for contact_pair in rapier_integration
+                    .narrow_phase
+                    .contacts_with(collider.collider_handle)
+                {
+                    if !contact_pair.has_any_active_contact {
+                        continue;
+                    }
 
-                let user_data = rapier_integration
-                    .collider_set
-                    .get(other_collider)
-                    .unwrap()
-                    .user_data;
+                    let other_collider = if contact_pair.collider1 == collider.collider_handle {
+                        contact_pair.collider2
+                    } else {
+                        contact_pair.collider1
+                    };
 
-                if user_data != 0 {
-                    let entity = Entity::from_bits(user_data as _).unwrap();
+                    let user_data = rapier_integration
+                        .collider_set
+                        .get(other_collider)
+                        .unwrap()
+                        .user_data;
 
-                    if let Ok(mut peg) = world.get::<&mut Peg>(entity) {
-                        if !peg.hit {
-                            peg.hit = true;
-                            *world.get::<&mut Handle<Material>>(entity).unwrap() =
-                                peg.glowing_material.clone();
-                            audio_manager.play_one_shot_with_speed(
-                                peg_hit_sound,
-                                level_state.pitch_multiplier,
-                            );
-                            level_state.pitch_multiplier += 0.1;
+                    if user_data != 0 {
+                        let entity = Entity::from_bits(user_data as _).unwrap();
 
-                            world.get::<&mut Scale>(peg.shockwave_child).unwrap().t = 0.5;
-                            level_state.collected_pegs.push(entity);
+                        if let Ok(mut peg) = world.get::<&mut Peg>(entity) {
+                            if !peg.hit {
+                                peg.hit = true;
+                                *world.get::<&mut Handle<Material>>(entity).unwrap() =
+                                    peg.glowing_material.clone();
+                                audio_manager.play_one_shot_with_speed(
+                                    peg_hit_sound,
+                                    level_state.pitch_multiplier,
+                                );
+                                level_state.pitch_multiplier += 0.1;
+                                level_state.pitch_multiplier =
+                                    level_state.pitch_multiplier.min(50.0);
 
-                            match peg.peg_type {
-                                PegType::Gold => {
-                                    resources.get::<UIState>().gold += 1;
+                                world.get::<&mut Scale>(peg.shockwave_child).unwrap().t = 0.5;
+                                level_state.collected_pegs.push(entity);
+
+                                match peg.peg_type {
+                                    PegType::Gold => {
+                                        level_state.screen_shake_amount += 0.3;
+                                        resources.get::<UIState>().gold += 1;
+                                    }
+                                    PegType::MultiBall => {
+                                        level_state.screen_shake_amount += 0.1;
+                                        let position =
+                                            world.get::<&GlobalTransform>(entity).unwrap().position;
+
+                                        deferred_actions.push(DelayedAction::new(
+                                            move |world, resources| {
+                                                let _ = world.despawn(entity);
+                                                spawn_ball(
+                                                    world,
+                                                    resources,
+                                                    position.xy(),
+                                                    Vec2::ZERO,
+                                                    1.0,
+                                                    3.5,
+                                                );
+                                            },
+                                            0.01,
+                                        ))
+                                    }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
 
+                        if let Ok(mut powerup) = world.get::<&mut Powerup>(entity) {
+                            level_state.screen_shake_amount += 0.8;
+
+                            if powerup.cost < 0 {
+                                resources.get::<UIState>().gold -= powerup.cost;
+                            }
+                            powerup.cost -= 1;
+
+                            // Acquire power up
+                            if powerup.cost <= 0 {
+                                powerup.cost = 0;
+                                to_despawn.push(entity);
+                                level_state
+                                    .effects_to_apply_to_next_ball
+                                    .push(powerup.effect.clone());
+                                // Quit shop
+                            }
+                            to_despawn.push(e);
+                        }
                         // Remove health as this ball touches the peg to prevent it from getting stuck.
-                        world.get::<&mut Health>(entity).unwrap().0 -= 1.0 / 60.0;
+                        if let Ok(mut health) = world.get::<&mut Health>(entity) {
+                            health.0 -= ball.health_subtract_rate / 60.0;
+                        }
                     }
                 }
             }
+
+            world.spawn((rapier_integration,));
         }
-        world.spawn((rapier_integration,));
+
+        for deferred_action in deferred_actions {
+            world.spawn((deferred_action,));
+        }
+        for e in to_despawn {
+            if world.get::<&Powerup>(e).is_ok() {
+                let t = world.get::<&Transform>(e).unwrap().position;
+
+                world.spawn((DelayedAction::new(
+                    Box::new(move |world: &mut World, resources: &mut Resources| {
+                        // Replacement powerup
+                        spawn_brick_with_powerup(
+                            world,
+                            resources,
+                            t.xy(),
+                            Random::new().select_from_slice(&POWERUPS).clone(),
+                        );
+                    }),
+                    0.6,
+                ),));
+            }
+            let _ = world.insert_one(e, Temporary(10));
+        }
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum PegType {
     GrowablePlant,
     Plant,
     Gold,
     Stone,
+    MultiBall,
 }
 fn spawn_peg(
     world: &mut World,
@@ -775,12 +1155,18 @@ fn spawn_peg(
 ) -> Entity {
     let game_assets = resources.get::<GameAssets>();
 
+    let mut scale = 4.0 * 2.4;
+
+    if peg_type == PegType::Gold {
+        scale *= 1.4;
+    }
+
     let rapier_handle = {
         let mut q = world.query::<&mut RapierIntegration>();
         let rapier_integration = q.iter().next().unwrap().1;
         rapier_integration.add_rigid_body_with_collider(
             RigidBodyBuilder::kinematic_position_based().build(),
-            ColliderBuilder::ball(0.5 * 3.8).restitution(0.7).build(),
+            ColliderBuilder::ball(scale * 0.3).restitution(0.7).build(),
         )
     };
 
@@ -793,6 +1179,7 @@ fn spawn_peg(
         PegType::Plant => &game_assets.plant_material,
         PegType::Gold => &game_assets.gold_material,
         PegType::Stone => &game_assets.stone_material,
+        PegType::MultiBall => &game_assets.multiball_material,
     };
 
     let child = world.spawn((
@@ -801,7 +1188,7 @@ fn spawn_peg(
         Mesh::VERTICAL_QUAD,
         Scale {
             rate: 5.0,
-            t: 2.0,
+            t: 1.0,
             max_scale: 1.5,
             t_max: 2.0,
         },
@@ -811,20 +1198,115 @@ fn spawn_peg(
 
     let parent = world.spawn((
         Transform::new()
-            .with_scale(Vec3::fill(4.0 * 2.4))
+            .with_scale(Vec3::fill(scale))
             .with_position(position),
         Mesh::VERTICAL_QUAD,
         Peg {
             hit: false,
             glowing_material: glowing.clone(),
             shockwave_child: child,
-            peg_type,
+            peg_type: peg_type.clone(),
         },
         Health(1.0),
         base.clone(),
         rapier_handle,
     ));
+    match peg_type {
+        PegType::GrowablePlant => {
+            let _ = world.insert(parent, (Plant { last_direction: 0 },));
+        }
+        _ => {}
+    }
     let _ = world.set_parent(parent, child);
+    parent
+}
+
+#[derive(Clone)]
+struct Powerup {
+    cost: i32,
+    description: &'static str,
+    effect: Effects,
+}
+
+fn spawn_brick(
+    world: &mut World,
+    resources: &mut Resources,
+    position: Vec2,
+    dimensions: Vec2,
+) -> Entity {
+    let game_assets = resources.get::<GameAssets>();
+
+    let rapier_handle = {
+        let mut q = world.query::<&mut RapierIntegration>();
+        let rapier_integration = q.iter().next().unwrap().1;
+        rapier_integration.add_rigid_body_with_collider(
+            RigidBodyBuilder::kinematic_position_based().build(),
+            ColliderBuilder::cuboid(dimensions.x / 2.0 * 0.98, dimensions.y / 2.0 * 0.98)
+                .restitution(0.7)
+                .build(),
+        )
+    };
+
+    let position = position.extend(0.3);
+
+    let parent = world.spawn((
+        Transform::new()
+            .with_scale(dimensions.extend(1.0))
+            .with_position(position),
+        Mesh::VERTICAL_QUAD,
+        Health(1.0),
+        game_assets.brick_material.clone(),
+        rapier_handle,
+    ));
+
+    parent
+}
+
+fn spawn_brick_with_powerup(
+    world: &mut World,
+    resources: &mut Resources,
+    position: Vec2,
+    powerup: Powerup,
+) -> Entity {
+    let dimensions = Vec2::new(40.0, 20.0);
+
+    let name = powerup.description;
+
+    let screen_space_ui = ScreenSpaceUI::new(
+        world,
+        resources,
+        kui::center(kui::text(move |state: &mut UIState| {
+            let mut name = name.to_string().clone();
+            name.push_str(&format!(": {:?}", state.hacky_remaining_health));
+            name
+        })),
+    );
+    let game_assets = resources.get::<GameAssets>();
+
+    let rapier_handle = {
+        let mut q = world.query::<&mut RapierIntegration>();
+        let rapier_integration = q.iter().next().unwrap().1;
+        rapier_integration.add_rigid_body_with_collider(
+            RigidBodyBuilder::kinematic_position_based().build(),
+            ColliderBuilder::cuboid(dimensions.x / 2.0 * 0.98, dimensions.y / 2.0 * 0.98)
+                .restitution(0.7)
+                .build(),
+        )
+    };
+
+    let position = position.extend(0.3);
+
+    let parent = world.spawn((
+        Transform::new()
+            .with_scale(dimensions.extend(1.0))
+            .with_position(position),
+        Mesh::VERTICAL_QUAD,
+        powerup,
+        game_assets.brick_material.clone(),
+        rapier_handle,
+    ));
+
+    let _ = world.set_parent(parent, screen_space_ui);
     parent
 }
 
@@ -856,10 +1338,4 @@ fn spawn_plant(world: &mut World, resources: &Resources, position: Vec2, stem_di
             .with_scale(Vec3::new(2.0, stem_direction.length() * 1.1, 1.0)),
         resources.get::<GameAssets>().stem_material.clone(),
     ));
-}
-
-fn spawn_growable_plant_peg(world: &mut World, resources: &Resources, position: Vec2) {
-    let e = spawn_peg(world, resources, position, PegType::GrowablePlant);
-
-    let _ = world.insert(e, (Plant { last_direction: 0 },));
 }

@@ -47,6 +47,6 @@ pub fn run_delayed_actions(world: &mut World, resources: &mut Resources) {
     for e in to_despawn {
         let f = world.remove_one::<DelayedAction>(e).unwrap();
         (f.thing_to_do)(world, resources);
-        world.despawn(e);
+        let _ = world.despawn(e);
     }
 }
