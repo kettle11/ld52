@@ -17,6 +17,7 @@ pub struct UIState {
     pub gold: i32,
     pub incoming_gold: i32,
     pub hacky_remaining_health: i32,
+    pub ball_active: bool,
 }
 
 impl UI {
@@ -41,10 +42,11 @@ impl UI {
     }
     pub fn new(world: &mut World, resources: &mut Resources) -> Self {
         resources.add(UIState {
-            current_text: "Welcome to the farm!".to_string(),
+            current_text: "Welcome to my farm!".to_string(),
             gold: 20,
             incoming_gold: 0,
             hacky_remaining_health: 0,
+            ball_active: false,
         });
 
         let projection_matrix =
@@ -124,42 +126,57 @@ impl UI {
             )))),
         );
 
-        let ui = stack((
-            row((
-                padding(fit(stack((
-                    rounded_fill(
-                        |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
-                        |_, c| c.standard_style().rounding,
-                    ),
+        let ui = padding_with_amount(
+            |_| 10.0,
+            stack((
+                column_unspaced((
                     padding_with_amount(
-                        |_| 20.0,
-                        text(|state: &mut UIState| format!("Gold: {:?}", state.gold)),
+                        |_| 5.0,
+                        fit(stack((
+                            rounded_fill(
+                                |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
+                                |_, c| c.standard_style().rounding,
+                            ),
+                            padding_with_amount(
+                                |_| 20.0,
+                                text(|state: &mut UIState| format!("Gold: {:?}/1000", state.gold)),
+                            ),
+                        ))),
                     ),
-                )))),
-                padding(fit(stack((
-                    rounded_fill(
-                        |_, _, _c: &StandardContext<_>| Color::from_srgb_hex(0xF0CA00, 1.0),
-                        |_, c| c.standard_style().rounding,
-                    ),
-                    padding_with_amount(|_| 20.0, text("Press 'S' to open the shop")),
-                )))),
-            )),
-            align(
-                Alignment::End,
-                Alignment::Start,
-                row((
-                    colored_rectangle(Vec2::new(50.0, 0.0), |_, _, _| Color::TRANSPARENT),
-                    padding(fit(stack((
-                        rounded_fill(
-                            |_, _, c: &StandardContext<_>| Color::from_srgb_hex(0xECCAC1, 1.0),
-                            |_, c| c.standard_style().rounding,
+                    toggle(
+                        |ui_state: &UIState, _| !ui_state.ball_active,
+                        empty(),
+                        padding_with_amount(
+                            |_| 5.0,
+                            fit(stack((
+                                rounded_fill(
+                                    |_, _, _c: &StandardContext<_>| {
+                                        Color::from_srgb_hex(0xF0CA00, 1.0)
+                                    },
+                                    |_, c| c.standard_style().rounding,
+                                ),
+                                padding_with_amount(|_| 15.0, text("Press 'S' to toggle the shop")),
+                            ))),
                         ),
-                        padding(text(|state: &mut UIState| state.current_text.clone())),
-                    )))),
+                    ),
                 )),
-            ),
-            center(center_text),
-        ));
+                align(
+                    Alignment::End,
+                    Alignment::Start,
+                    row((
+                        colored_rectangle(Vec2::new(50.0, 0.0), |_, _, _| Color::TRANSPARENT),
+                        fit(stack((
+                            rounded_fill(
+                                |_, _, c: &StandardContext<_>| Color::from_srgb_hex(0xECCAC1, 1.0),
+                                |_, c| c.standard_style().rounding,
+                            ),
+                            padding(text(|state: &mut UIState| state.current_text.clone())),
+                        ))),
+                    )),
+                ),
+                center(center_text),
+            )),
+        );
 
         Self {
             drawer: kui::Drawer::new(),

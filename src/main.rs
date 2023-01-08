@@ -47,8 +47,8 @@ const ROCK_STORM: Powerup = Powerup {
 };
 
 const SEED_FRENZY: Powerup = Powerup {
-    cost: 40,
-    description: "Plant Seeds",
+    cost: 10,
+    description: "Plant a Seed",
     effect: Effects::SeedStorm,
 };
 const ROCKS_TO_GOLD: Powerup = Powerup {
@@ -58,13 +58,13 @@ const ROCKS_TO_GOLD: Powerup = Powerup {
 };
 
 const MULTIBALL_STORM: Powerup = Powerup {
-    cost: 20,
+    cost: 5,
     description: "Multiballs!",
     effect: Effects::MultiBallStorm,
 };
 
 const MULTIPLIER_STORM: Powerup = Powerup {
-    cost: 50,
+    cost: 30,
     description: "Multipliers!",
     effect: Effects::MultiplierStorm,
 };
@@ -903,6 +903,12 @@ fn main() {
             // See [koi::Event]
             move |event, world, resources| match event {
                 Event::FixedUpdate => {
+                    {
+                        let mut ui_state = resources.get::<UIState>();
+                        let level_state = resources.get::<LevelState>();
+                        ui_state.ball_active = level_state.ready_to_shoot;
+                    }
+
                     temporary::run_delayed_actions(world, resources);
 
                     // Update the shot visual
@@ -954,7 +960,10 @@ fn main() {
                 }
                 Event::KappEvent(KappEvent::KeyDown { key: Key::S, .. }) => {
                     let mut level_state = resources.remove::<LevelState>().unwrap();
-                    level_state.toggle_shop(world, resources);
+
+                    if level_state.ready_to_shoot {
+                        level_state.toggle_shop(world, resources);
+                    }
                     resources.add(level_state);
                 }
                 Event::Draw => {
@@ -967,12 +976,12 @@ fn main() {
                                 ui_state.incoming_gold -= 1;
                                 ui_state.gold += 1;
                                 subtract_gold_timer = 0.2;
-                                level_state.screen_shake_amount += 0.05;
+                                level_state.screen_shake_amount += 0.1;
                             } else {
                                 subtract_gold_timer -= 30.0 / 60.0;
                             }
                         } else {
-                            subtract_gold_timer = 1.5;
+                            subtract_gold_timer = 2.0;
                         }
 
                         let screen_shake_amount = &mut level_state.screen_shake_amount;
@@ -1236,6 +1245,9 @@ fn run_balls(world: &mut World, resources: &mut Resources, world_bottom: f32) {
             if new_gold == 0 {
                 resources.get::<UIState>().current_text = ":(".into();
             }
+            if new_gold > 0 {
+                resources.get::<UIState>().current_text = "Not bad!".into();
+            }
 
             if new_gold > 10 {
                 resources.get::<UIState>().current_text = "Nice shot!".into();
@@ -1434,8 +1446,8 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
                             powerup.cost -= 1;
 
                             // Acquire power up
-                            if powerup.cost <= 0 {
-                                powerup.cost = 0;
+                            if powerup.cost <= 0 && powerup.cost != -20 {
+                                powerup.cost = -20;
                                 to_despawn.push(entity);
                                 level_state
                                     .effects_to_apply_to_next_ball
@@ -1462,6 +1474,7 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
             if world.get::<&Powerup>(e).is_ok() {
                 let t = world.get::<&Transform>(e).unwrap().position;
 
+                println!("REPLACEMENT!");
                 world.spawn((DelayedAction::new(
                     Box::new(move |world: &mut World, resources: &mut Resources| {
                         // Replacement powerup
@@ -1472,7 +1485,8 @@ fn run_pegs(world: &mut World, resources: &mut Resources, peg_hit_sound: &Handle
                     0.6,
                 ),));
             }
-            let _ = world.insert_one(e, Temporary(10));
+
+            let _ = world.despawn(e);
         }
     }
 }
